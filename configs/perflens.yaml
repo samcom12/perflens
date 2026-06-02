@@ -1,0 +1,95 @@
+# perflens.yaml — Default PerfLens configuration
+# Place in project root or pass with: perflens --config perflens.yaml
+
+# ── Target hardware profile ─────────────────────────────────────────────────
+hardware:
+  profile: "auto"          # auto-detect | a100 | h100 | v100 | intel_spr | amd_genoa | a64fx | graviton3
+  # Optionally override individual values
+  # cache_line_bytes: 64
+  # memory_bandwidth_gbs: 2000.0
+
+# ── Scanner settings ─────────────────────────────────────────────────────────
+scanner:
+  enabled: true
+  # Minimum severity to report: critical | high | medium | low | info
+  min_severity: "medium"
+  # Extra clang compilation flags for C/C++ parsing
+  extra_cflags:
+    - "-fopenmp"
+    - "-I/usr/include/mpi"
+  # Patterns to skip (file globs)
+  exclude:
+    - "*/third_party/**"
+    - "*/vendor/**"
+    - "*_test.*"
+
+# ── Profiler settings ────────────────────────────────────────────────────────
+profiler:
+  tool: "vtune"             # vtune | hpctoolkit
+  # Path to profiler report (overridden by --profile CLI flag)
+  # report_path: "results/vtune_r001hs/r001hs.csv"
+  # Top-N hotspots to surface to the LLM optimizer
+  top_hotspots: 10
+
+# ── LLM optimizer settings ───────────────────────────────────────────────────
+optimizer:
+  # Anthropic model to use
+  model: "claude-opus-4-5"
+  max_tokens: 8192
+  # Number of iterative optimization rounds
+  max_iterations: 3
+  # Prioritized transformation types (in order)
+  transform_priority:
+    - openmp_offload         # GPU offload first (for GPU clusters)
+    - loop_tiling            # Then cache blocking
+    - vectorization          # SIMD
+    - openmp_simd
+    - openmp_parallelise
+    - mpi_nonblocking
+    - hoist_invariant
+    - strength_reduction
+    - numpy_vectorise        # Python-specific
+    - numba_jit
+  # Stop if expected speedup is below this threshold
+  min_expected_speedup: 1.2
+  # Write optimized source to <original>_optimized_iter<N>.<ext>
+  output_suffix: "_optimized"
+
+# ── Validator settings ───────────────────────────────────────────────────────
+validator:
+  enabled: true
+  # Numerical tolerance for output comparison
+  tolerance: 1.0e-6
+  # Compiler flags for compile check (augment with hardware profile flags)
+  extra_cflags: ["-O2", "-Wall", "-fopenmp"]
+  # Test suite directory (relative to source file)
+  test_dir: null            # auto-discover: look for tests/ sibling
+  # Maximum wall-time for test suite (seconds)
+  test_timeout: 120
+
+# ── Dashboard settings ───────────────────────────────────────────────────────
+dashboard:
+  host: "0.0.0.0"
+  port: 8080
+  # SQLite database for benchmark history
+  db_path: "perflens_benchmarks.db"
+  # Auto-refresh interval in seconds
+  refresh_interval: 30
+
+# ── Pipeline settings ────────────────────────────────────────────────────────
+pipeline:
+  # Abort pipeline if scan finds critical issues
+  fail_on_critical: false
+  # Keep intermediate patched files (iter1, iter2, ...) for inspection
+  keep_intermediate: false
+  # Record each run to the dashboard DB automatically
+  record_to_dashboard: true
+  # Post results to this URL (optional webhook)
+  webhook_url: null
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  level: "INFO"             # DEBUG | INFO | WARNING | ERROR
+  file: null                # null = stdout only
+  # Include token usage in log output
+  show_token_usage: true

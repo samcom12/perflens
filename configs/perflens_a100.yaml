@@ -1,0 +1,59 @@
+# perflens_a100.yaml — Optimized config for NVIDIA A100 / CDAC Param Prabha cluster
+
+hardware:
+  profile: "a100"
+
+scanner:
+  enabled: true
+  min_severity: "medium"
+  extra_cflags:
+    - "-fopenmp"
+    - "-mp=gpu"                         # nvc OpenMP GPU offload
+    - "-I/opt/nvidia/hpc_sdk/Linux_x86_64/24.1/comm_libs/mpi/include"
+    - "-I/opt/nvidia/hpc_sdk/Linux_x86_64/24.1/cuda/include"
+
+profiler:
+  tool: "vtune"
+  top_hotspots: 10
+
+optimizer:
+  model: "claude-opus-4-5"
+  max_tokens: 8192
+  max_iterations: 4
+  # A100 priority: GPU offload first, then memory coalescing, then SIMD
+  transform_priority:
+    - openmp_offload
+    - memory_layout             # coalesced access on GPU
+    - vectorization
+    - loop_tiling               # L2/shared-memory tiling
+    - openmp_simd
+    - mpi_nonblocking
+    - hoist_invariant
+    - strength_reduction
+  min_expected_speedup: 1.5
+
+validator:
+  enabled: true
+  tolerance: 1.0e-5             # slightly relaxed for GPU FP order
+  extra_cflags:
+    - "-O3"
+    - "-mp=gpu"
+    - "-gpu=cc80"               # A100 CUDA compute capability 8.0
+    - "-Minfo=accel,opt"
+    - "-fopenmp"
+  test_timeout: 300
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8080
+  db_path: "/scratch/perflens/benchmarks_a100.db"
+
+pipeline:
+  fail_on_critical: false
+  keep_intermediate: true     # keep all iter files for review on cluster
+  record_to_dashboard: true
+
+logging:
+  level: "INFO"
+  file: "/scratch/perflens/perflens_a100.log"
+  show_token_usage: true

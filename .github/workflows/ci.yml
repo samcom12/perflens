@@ -1,0 +1,184 @@
+name: PerfLens CI
+
+on:
+  push:
+    branches: [main, develop, "feat/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Lint and type-check ─────────────────────────────────────────────────────
+  lint:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]" --quiet
+
+      - name: Run ruff (linter)
+        run: ruff check perflens/ tests/
+
+      - name: Run black (formatter check)
+        run: black --check perflens/ tests/
+
+      - name: Run mypy (type checker)
+        run: mypy perflens/ --ignore-missing-imports
+        continue-on-error: true   # mypy failures are warnings for now
+
+  # ── Unit tests ──────────────────────────────────────────────────────────────
+  test-unit:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ gfortran libclang-dev clang \
+            libopenmpi-dev openmpi-bin
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]" --quiet
+          pip install libclang fparser --quiet || true
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ \
+            -v \
+            --cov=perflens \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --tb=short \
+            -x
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.11'
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
+  # ── Integration tests ───────────────────────────────────────────────────────
+  test-integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test-unit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            gcc g++ gfortran libopenmpi-dev openmpi-bin
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[dev]" --quiet
+          pip install httpx pytest-timeout --quiet
+
+      - name: Run integration tests (no LLM)
+        run: |
+          pytest tests/integration/ \
+            -v \
+            --tb=short \
+            --timeout=60 \
+            -x
+        env:
+          PERFLENS_RUN_LLM_TESTS: "0"
+
+  # ── Example file scan ────────────────────────────────────────────────────────
+  scan-examples:
+    name: Scan Example Files
+    runs-on: ubuntu-latest
+    needs: test-unit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e "." --quiet
+
+      - name: Scan C example
+        run: perflens scan examples/c/stencil.c
+
+      - name: Scan C++ example
+        run: perflens scan examples/cpp/matmul.cpp
+
+      - name: Scan Fortran example
+        run: perflens scan examples/fortran/jacobi.f90
+
+      - name: Scan Python heat solver
+        run: perflens scan examples/python/heat_solver.py
+
+      - name: Scan Python shallow water
+        run: perflens scan examples/python/shallow_water.py
+
+      - name: List hardware profiles
+        run: perflens hw list
+
+      - name: Detect hardware
+        run: perflens hw detect
+
+  # ── Dashboard smoke test ──────────────────────────────────────────────────────
+  dashboard-smoke:
+    name: Dashboard Smoke Test
+    runs-on: ubuntu-latest
+    needs: test-unit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]" --quiet
+
+      - name: Run dashboard integration tests
+        run: |
+          pytest tests/integration/test_pipeline.py \
+            -k "dashboard" \
+            -v --tb=short
