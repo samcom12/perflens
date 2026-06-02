@@ -1,0 +1,12 @@
+project:
+  name: perflens-self-check
+  root: .
+validation:
+  commands:
+    - name: unit-tests
+      command: "{python} -m unittest discover -s tests"
+benchmark:
+  repeat: 1
+  commands:
+    - name: cli-help
+      command: "{python} -m perflens --help"

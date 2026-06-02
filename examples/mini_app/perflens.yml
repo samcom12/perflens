@@ -1,0 +1,12 @@
+project:
+  name: perflens-mini-app
+  root: .
+validation:
+  commands:
+    - name: python-smoke
+      command: "{python} vector_loop.py"
+benchmark:
+  repeat: 3
+  commands:
+    - name: python-loop
+      command: "{python} vector_loop.py --benchmark"

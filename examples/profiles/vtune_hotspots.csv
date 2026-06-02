@@ -1,0 +1,5 @@
+Function,Module,Source File,Line,CPU Time,% of CPU Time
+stencil_step,mini_app,stencil.c,8,42.7,62.4
+kernel,mini_app,vector_loop.py,10,18.2,26.6
+update_particles,mini_app,particles.cpp,12,7.4,10.8
+

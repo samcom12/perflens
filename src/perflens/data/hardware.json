@@ -1,0 +1,110 @@
+{
+  "hardware": [
+    {
+      "id": "generic-x86-64",
+      "vendor": "generic",
+      "model": "x86-64 CPU",
+      "kind": "cpu",
+      "cores": null,
+      "threads": null,
+      "simd": ["sse2", "avx2"],
+      "memory": {
+        "notes": "Fill in cache sizes and memory bandwidth for the target node."
+      },
+      "gpu": {},
+      "compilers": ["gcc", "clang", "intel-oneapi"],
+      "tune_hints": [
+        "Prefer contiguous memory access and unit-stride inner loops.",
+        "Check compiler vectorization reports before forcing intrinsics.",
+        "Benchmark with representative problem sizes and pinned CPU frequency."
+      ]
+    },
+    {
+      "id": "amd-zen4",
+      "vendor": "AMD",
+      "model": "EPYC Zen 4",
+      "kind": "cpu",
+      "cores": 96,
+      "threads": 192,
+      "simd": ["avx2", "avx512"],
+      "memory": {
+        "channels": 12,
+        "notes": "Bandwidth-sensitive kernels should be checked for NUMA placement and first-touch initialization."
+      },
+      "gpu": {},
+      "compilers": ["gcc", "clang", "aocc", "intel-oneapi"],
+      "tune_hints": [
+        "Use AVX-512-aware compiler flags on nodes where frequency behavior is acceptable.",
+        "Validate OpenMP thread affinity and NUMA first-touch behavior.",
+        "Tile memory-bound stencils to improve cache reuse."
+      ]
+    },
+    {
+      "id": "intel-sapphire-rapids",
+      "vendor": "Intel",
+      "model": "Xeon Sapphire Rapids",
+      "kind": "cpu",
+      "cores": 60,
+      "threads": 120,
+      "simd": ["avx2", "avx512", "amx"],
+      "memory": {
+        "channels": 8,
+        "notes": "AMX helps dense matrix kernels when libraries and data types are aligned with the target."
+      },
+      "gpu": {},
+      "compilers": ["intel-oneapi", "gcc", "clang"],
+      "tune_hints": [
+        "Use oneAPI reports for vectorization, threading, and memory diagnostics.",
+        "Consider AMX-enabled math libraries for dense low-precision matrix kernels.",
+        "Tune OpenMP affinity with compact/scatter policies and measure both."
+      ]
+    },
+    {
+      "id": "nvidia-h100",
+      "vendor": "NVIDIA",
+      "model": "H100 SXM",
+      "kind": "gpu",
+      "cores": null,
+      "threads": null,
+      "simd": [],
+      "memory": {
+        "hbm": "80GB",
+        "notes": "Use Nsight Compute metrics to classify memory-bound versus compute-bound kernels."
+      },
+      "gpu": {
+        "architecture": "Hopper",
+        "compute_capability": "9.0",
+        "tensor_cores": true
+      },
+      "compilers": ["nvcc", "nvc++", "clang"],
+      "tune_hints": [
+        "Batch host-device transfers and avoid small synchronous copies.",
+        "Check occupancy, memory coalescing, shared-memory bank conflicts, and tensor-core eligibility.",
+        "Use CUDA graphs for repeated launch patterns when launch overhead is visible."
+      ]
+    },
+    {
+      "id": "amd-mi300a",
+      "vendor": "AMD",
+      "model": "Instinct MI300A",
+      "kind": "apu",
+      "cores": null,
+      "threads": null,
+      "simd": ["avx512"],
+      "memory": {
+        "notes": "Unified-memory behavior should be profiled carefully for placement and bandwidth."
+      },
+      "gpu": {
+        "architecture": "CDNA3",
+        "hip": true
+      },
+      "compilers": ["rocm", "hipcc", "clang", "aocc"],
+      "tune_hints": [
+        "Use ROCm profiling to separate kernel time, transfer time, and memory-placement effects.",
+        "Prefer large, coalesced GPU kernels and avoid excessive CPU-GPU synchronization.",
+        "Validate HIP portability separately from CUDA-oriented assumptions."
+      ]
+    }
+  ]
+}
+

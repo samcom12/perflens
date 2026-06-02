@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "perflens"
+version = "0.1.0"
+description = "Automation framework for optimizing HPC codebases with static analysis, profiling, hardware-aware recommendations, validation, and dashboards."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "perflens contributors" }
+]
+keywords = ["hpc", "performance", "clang", "hpctoolkit", "vtune", "optimization"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: C",
+  "Programming Language :: C++",
+  "Programming Language :: Fortran",
+  "Topic :: Software Development :: Build Tools",
+  "Topic :: System :: Benchmark"
+]
+dependencies = []
+
+[project.optional-dependencies]
+yaml = ["PyYAML>=6"]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+perflens = "perflens.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+perflens = ["data/*.json"]
+

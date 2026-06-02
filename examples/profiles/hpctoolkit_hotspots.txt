@@ -1,0 +1,4 @@
+62.4% 42.7s stencil_step stencil.c:8
+26.6% 18.2s kernel vector_loop.py:10
+10.8% 7.4s update_particles particles.cpp:12
+
