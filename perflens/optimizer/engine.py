@@ -1,44 +1,49 @@
 """
-LLM Optimization Engine — drives Anthropic Claude to produce
-source-level performance transformations.
+LLM Optimization Engine — multi-backend, iterative source transformation.
 
-Features:
-- Multi-iteration optimization loop (each iteration sees the previous result)
-- Structured JSON patch extraction
-- Full rewritten source extraction
-- Token budget tracking
-- Dry-run mode (show proposed patches, do not write files)
+Supported backends (--backend flag):
+  rules           Zero-LLM rule engine (no key needed, default)
+  ollama          Local Ollama server (no key needed)
+  ollama:<model>  Ollama with a specific model
+  lmstudio        LM Studio local server (no key)
+  llamacpp        llama.cpp local server (no key)
+  vllm            vLLM local server (no key)
+  groq            Groq cloud (free tier, no Anthropic key)
+  anthropic       Anthropic Claude API (requires ANTHROPIC_API_KEY)
 """
 
 from __future__ import annotations
 
-import json
-import os
 import re
+import json
 from pathlib import Path
 from typing import Optional
 
 from perflens.hardware.database import HardwareDatabase
 from perflens.hardware.detector import detect_hardware
 from perflens.hardware.models import HardwareProfile
+from perflens.optimizer.backends.base import LLMBackend
+from perflens.optimizer.backends.registry import create_backend
 from perflens.optimizer.models import OptimizationResult, Patch, TransformKind
 from perflens.optimizer.prompt_builder import _SYSTEM_PROMPT, build_optimization_prompt
 from perflens.profiler.models import ProfileData
 from perflens.scanner.dispatcher import detect_language, scan_file
 from perflens.scanner.models import Finding
 
-_MODEL = "claude-opus-4-5"
 _MAX_TOKENS = 8192
 
 
 class OptimizationEngine:
     """
-    Iteratively apply LLM-driven optimizations to a source file.
+    Iteratively apply optimizations to a source file.
 
-    Usage::
+    Backend selection::
 
-        engine = OptimizationEngine(hw_profile="a100", max_iterations=3)
-        results = engine.optimize(Path("solver.c"), profile_data=pd)
+        OptimizationEngine(backend="rules")           # no key, default
+        OptimizationEngine(backend="ollama")          # local Ollama
+        OptimizationEngine(backend="ollama:llama3:8b")
+        OptimizationEngine(backend="groq")            # needs GROQ_API_KEY
+        OptimizationEngine(backend="anthropic")       # needs ANTHROPIC_API_KEY
     """
 
     def __init__(
@@ -46,21 +51,42 @@ class OptimizationEngine:
         hw_profile: str = "auto",
         max_iterations: int = 3,
         dry_run: bool = False,
+        backend: str = "rules",
+        # Backend-specific kwargs forwarded to create_backend()
+        ollama_model: str = "codellama:34b",
+        ollama_host: str = "http://localhost:11434",
+        compat_url: Optional[str] = None,
+        compat_model: Optional[str] = None,
+        compat_key: Optional[str] = None,
         api_key: Optional[str] = None,
     ):
         self.max_iterations = max_iterations
-        self.dry_run = dry_run
-        self._api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
+        self.dry_run        = dry_run
 
+        # Resolve hardware profile
         db = HardwareDatabase()
         if hw_profile == "auto":
             self.hardware = detect_hardware()
         else:
             hw = db.get(hw_profile)
             if hw is None:
-                raise ValueError(f"Unknown hardware profile '{hw_profile}'. "
-                                 f"Available: {db.list_ids()}")
+                raise ValueError(
+                    f"Unknown hardware profile '{hw_profile}'. "
+                    f"Available: {db.list_ids()}"
+                )
             self.hardware = hw
+
+        # Resolve backend
+        self.backend: LLMBackend = create_backend(
+            backend,
+            ollama_model=ollama_model,
+            ollama_host=ollama_host,
+            compat_url=compat_url,
+            compat_model=compat_model,
+            compat_key=compat_key,
+            api_key=api_key,
+        )
+        self._backend_name = backend
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -70,23 +96,39 @@ class OptimizationEngine:
         profile_data: Optional[ProfileData] = None,
         findings: Optional[list[Finding]] = None,
     ) -> list[OptimizationResult]:
-        """
-        Run up to *max_iterations* optimization passes on *source*.
-
-        Returns a list of OptimizationResult (one per iteration).
-        """
-        if not self._api_key:
-            raise EnvironmentError(
-                "ANTHROPIC_API_KEY not set. Export it before running perflens optimize."
-            )
-
+        """Run up to *max_iterations* optimization passes on *source*."""
         language = detect_language(source)
         if findings is None:
             findings = scan_file(source, language=language)
 
+        # ── Rule-engine path (no LLM) ─────────────────────────────────────
+        from perflens.optimizer.rules.rule_engine import RuleEngineBackend
+        if isinstance(self.backend, RuleEngineBackend):
+            source_text = source.read_text(errors="replace")
+            result = self.backend.run_rules(
+                source_path=source,
+                source_text=source_text,
+                language=language,
+                hardware=self.hardware,
+                findings=findings,
+            )
+            return [result]
+
+        # ── LLM path ──────────────────────────────────────────────────────
+        if not self.backend.is_available():
+            caps = self.backend.capabilities
+            raise EnvironmentError(
+                f"Backend '{caps.name}' is not available.\n"
+                f"  Local: {caps.local}  Requires key: {caps.requires_api_key}\n"
+                f"  Notes: {caps.notes}\n"
+                f"\nTo use a key-free backend:\n"
+                f"  perflens optimize {source} --backend rules\n"
+                f"  perflens optimize {source} --backend ollama\n"
+                f"  perflens optimize {source} --backend groq  (needs GROQ_API_KEY)"
+            )
+
         current_source = source.read_text(errors="replace")
         results: list[OptimizationResult] = []
-        total_tokens = 0
 
         for iteration in range(1, self.max_iterations + 1):
             result = self._run_iteration(
@@ -98,22 +140,17 @@ class OptimizationEngine:
                 iteration=iteration,
             )
             results.append(result)
-            total_tokens += result.tokens_used
 
             if not result.success:
                 break
-
-            # Feed optimized source into next iteration
             if result.optimized_source:
                 current_source = result.optimized_source
-
-            # Stop if no patches proposed (converged)
             if not result.patches:
-                break
+                break   # converged
 
         return results
 
-    # ── Private: single iteration ────────────────────────────────────────────
+    # ── Single LLM iteration ──────────────────────────────────────────────────
 
     def _run_iteration(
         self,
@@ -124,16 +161,6 @@ class OptimizationEngine:
         profile_data: Optional[ProfileData],
         iteration: int,
     ) -> OptimizationResult:
-        try:
-            import anthropic
-        except ImportError:
-            return OptimizationResult(
-                source=source, iteration=iteration,
-                error="anthropic package not installed — run: pip install anthropic",
-            )
-
-        client = anthropic.Anthropic(api_key=self._api_key)
-
         messages = build_optimization_prompt(
             source=source,
             source_text=source_text,
@@ -143,27 +170,20 @@ class OptimizationEngine:
             profile_data=profile_data,
             iteration=iteration,
         )
-
         try:
-            response = client.messages.create(
-                model=_MODEL,
-                max_tokens=_MAX_TOKENS,
+            raw_text = self.backend.generate(
                 system=_SYSTEM_PROMPT,
                 messages=messages,
+                max_tokens=_MAX_TOKENS,
             )
         except Exception as exc:
             return OptimizationResult(
                 source=source, iteration=iteration,
-                error=f"Anthropic API error: {exc}",
+                error=f"{self.backend.capabilities.name} error: {exc}",
             )
 
-        raw_text = "".join(
-            block.text for block in response.content if hasattr(block, "text")
-        )
-        tokens_used = response.usage.input_tokens + response.usage.output_tokens
-
         patches, explanation = self._parse_response(raw_text)
-        optimized_source = self._extract_optimized_source(raw_text)
+        optimized_source     = self._extract_optimized_source(raw_text)
 
         return OptimizationResult(
             source=source,
@@ -171,42 +191,34 @@ class OptimizationEngine:
             patches=patches,
             optimized_source=optimized_source,
             llm_explanation=explanation,
-            tokens_used=tokens_used,
+            tokens_used=0,    # token tracking is backend-specific
         )
 
-    # ── Parsing helpers ───────────────────────────────────────────────────────
+    # ── Response parsing ──────────────────────────────────────────────────────
 
     @staticmethod
     def _parse_response(text: str) -> tuple[list[Patch], str]:
-        """Extract the JSON patch list and explanation from the LLM response."""
         patches: list[Patch] = []
         explanation = ""
 
-        # Find JSON block
-        json_match = re.search(
-            r"```json\s*(\{.*?\})\s*```",
-            text, re.DOTALL,
-        )
+        json_match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
         if not json_match:
-            # Try bare JSON object
             json_match = re.search(r"\{[^{}]*\"patches\"[^{}]*\[.*?\]\s*\}", text, re.DOTALL)
 
         if json_match:
             try:
-                data = json.loads(json_match.group(1) if json_match.lastindex else json_match.group(0))
+                data        = json.loads(json_match.group(1) if json_match.lastindex else json_match.group(0))
                 explanation = data.get("explanation", "")
-
                 for p in data.get("patches", []):
                     kind_str = p.get("transform_kind", "general")
                     try:
                         kind = TransformKind(kind_str)
                     except ValueError:
                         kind = TransformKind.GENERAL
-
                     patches.append(Patch(
                         transform_kind=kind,
                         description=p.get("description", ""),
-                        original_snippet="",   # filled in by validator if needed
+                        original_snippet="",
                         optimized_snippet="",
                         start_line=int(p.get("start_line", 0)),
                         end_line=int(p.get("end_line", 0)),
@@ -216,9 +228,7 @@ class OptimizationEngine:
             except (json.JSONDecodeError, KeyError):
                 pass
 
-        # Fallback: extract explanation from text
         if not explanation:
-            # Take first non-JSON paragraph
             clean = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
             clean = re.sub(r"<optimized_source>.*</optimized_source>", "", clean, flags=re.DOTALL)
             explanation = clean.strip()[:2000]
@@ -227,19 +237,12 @@ class OptimizationEngine:
 
     @staticmethod
     def _extract_optimized_source(text: str) -> Optional[str]:
-        """Pull the rewritten source from between <optimized_source> tags."""
-        m = re.search(
-            r"<optimized_source>\s*(.*?)\s*</optimized_source>",
-            text, re.DOTALL,
-        )
+        m = re.search(r"<optimized_source>\s*(.*?)\s*</optimized_source>", text, re.DOTALL)
         if m:
             src = m.group(1).strip()
-            # Strip any leftover markdown fences
             src = re.sub(r"^```\w*\n", "", src)
             src = re.sub(r"\n```$", "", src)
             return src
-
-        # Fallback: last code block in response
         blocks = re.findall(r"```(?:\w+)?\n(.*?)```", text, re.DOTALL)
         if blocks:
             return blocks[-1].strip()

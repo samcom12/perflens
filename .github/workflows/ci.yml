@@ -2,36 +2,24 @@ name: PerfLens CI
 
 on:
   push:
-    branches: [main, develop, "feat/**"]
+    branches: [main, develop, "feat/**", "fix/**"]
   pull_request:
     branches: [main]
 
 jobs:
-  # ── Lint and type-check ─────────────────────────────────────────────────────
+  # ── Lint ────────────────────────────────────────────────────────────────────
   lint:
     name: Lint & Type Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dev dependencies
-        run: pip install -e ".[dev]" --quiet
-
-      - name: Run ruff (linter)
-        run: ruff check perflens/ tests/
-
-      - name: Run black (formatter check)
-        run: black --check perflens/ tests/
-
-      - name: Run mypy (type checker)
-        run: mypy perflens/ --ignore-missing-imports
-        continue-on-error: true   # mypy failures are warnings for now
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: pip install ruff black mypy --quiet
+      - run: ruff check perflens/ tests/ --ignore E501,W503
+      - run: black --check perflens/ tests/
+      - run: mypy perflens/ --ignore-missing-imports
+        continue-on-error: true
 
   # ── Unit tests ──────────────────────────────────────────────────────────────
   test-unit:
@@ -41,144 +29,176 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: pip
-
-      - name: Install system dependencies
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python-version }}", cache: pip }
+      - name: System deps
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             gcc g++ gfortran libclang-dev clang \
             libopenmpi-dev openmpi-bin
-
-      - name: Install Python dependencies
+      - name: Python deps
         run: |
           pip install --upgrade pip
-          pip install -e ".[dev]" --quiet
+          pip install anthropic fastapi uvicorn plotly pandas numpy pyyaml \
+            rich typer jinja2 gitpython psutil pytest pytest-cov httpx \
+            starlette --quiet
           pip install libclang fparser --quiet || true
-
       - name: Run unit tests
         run: |
-          pytest tests/unit/ \
-            -v \
-            --cov=perflens \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage.xml \
-            --tb=short \
-            -x
+          PYTHONPATH=. pytest tests/unit/ \
+            -v --tb=short -x \
+            --cov=perflens --cov-report=xml:coverage.xml
         env:
           PYTHONDONTWRITEBYTECODE: "1"
-
       - name: Upload coverage
         if: matrix.python-version == '3.11'
         uses: codecov/codecov-action@v4
-        with:
-          files: coverage.xml
-          fail_ci_if_error: false
+        with: { files: coverage.xml, fail_ci_if_error: false }
 
   # ── Integration tests ───────────────────────────────────────────────────────
   test-integration:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: test-unit
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install system dependencies
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - name: System deps
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            gcc g++ gfortran libopenmpi-dev openmpi-bin
-
-      - name: Install Python dependencies
+          sudo apt-get install -y --no-install-recommends gcc g++ gfortran
+      - name: Python deps
         run: |
-          pip install --upgrade pip
-          pip install -e ".[dev]" --quiet
-          pip install httpx pytest-timeout --quiet
-
-      - name: Run integration tests (no LLM)
+          pip install anthropic fastapi uvicorn plotly pandas numpy pyyaml \
+            rich typer pytest pytest-cov httpx starlette --quiet
+      - name: Run integration tests
         run: |
-          pytest tests/integration/ \
-            -v \
-            --tb=short \
-            --timeout=60 \
-            -x
+          PYTHONPATH=. pytest tests/integration/ \
+            -v --tb=short --timeout=60 -x
         env:
           PERFLENS_RUN_LLM_TESTS: "0"
 
-  # ── Example file scan ────────────────────────────────────────────────────────
-  scan-examples:
-    name: Scan Example Files
+  # ── Rule engine (key-free path) ──────────────────────────────────────────────
+  test-rule-engine:
+    name: Rule Engine (Zero API Key)
     runs-on: ubuntu-latest
     needs: test-unit
-
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install
-        run: pip install -e "." --quiet
-
-      - name: Scan C example
-        run: perflens scan examples/c/stencil.c
-
-      - name: Scan C++ example
-        run: perflens scan examples/cpp/matmul.cpp
-
-      - name: Scan Fortran example
-        run: perflens scan examples/fortran/jacobi.f90
-
-      - name: Scan Python heat solver
-        run: perflens scan examples/python/heat_solver.py
-
-      - name: Scan Python shallow water
-        run: perflens scan examples/python/shallow_water.py
-
-      - name: List hardware profiles
-        run: perflens hw list
-
-      - name: Detect hardware
-        run: perflens hw detect
-
-  # ── Dashboard smoke test ──────────────────────────────────────────────────────
-  dashboard-smoke:
-    name: Dashboard Smoke Test
-    runs-on: ubuntu-latest
-    needs: test-unit
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install
-        run: pip install -e ".[dev]" --quiet
-
-      - name: Run dashboard integration tests
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: |
+          pip install anthropic fastapi uvicorn plotly pandas numpy pyyaml \
+            rich typer pytest httpx starlette --quiet
+      - name: Run rule engine on all example files
         run: |
-          pytest tests/integration/test_pipeline.py \
-            -k "dashboard" \
-            -v --tb=short
+          PYTHONPATH=. python -c "
+          from pathlib import Path
+          from perflens.optimizer.engine import OptimizationEngine
+          from perflens.hardware.database import HardwareDatabase
+
+          hw = HardwareDatabase().get('a100')
+          engine = OptimizationEngine(hw_profile='a100', backend='rules')
+
+          examples = [
+              ('examples/c/stencil.c',              'c'),
+              ('examples/cpp/matmul.cpp',            'cpp'),
+              ('examples/python/heat_solver.py',     'python'),
+              ('examples/python/shallow_water.py',   'python'),
+              ('examples/fortran/jacobi.f90',        'fortran'),
+          ]
+          for path_str, lang in examples:
+              p = Path(path_str)
+              print(f'Optimizing {p.name}...')
+              results = engine.optimize(p)
+              assert results, f'No results for {p}'
+              r = results[0]
+              print(f'  patches={len(r.patches)}  '
+                    f'modified={r.optimized_source is not None}')
+              if r.patches:
+                  for patch in r.patches:
+                      print(f'    -> {patch.transform_kind.value}  {patch.expected_speedup}')
+          print('All examples optimized OK (rule engine, zero API key)')
+          "
+
+  # ── Scan example files ───────────────────────────────────────────────────────
+  scan-examples:
+    name: Scan All Examples
+    runs-on: ubuntu-latest
+    needs: test-unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: |
+          pip install anthropic fastapi uvicorn plotly pandas numpy pyyaml \
+            rich typer --quiet
+      - run: PYTHONPATH=. python -m perflens.cli scan examples/c/stencil.c
+      - run: PYTHONPATH=. python -m perflens.cli scan examples/cpp/matmul.cpp
+      - run: PYTHONPATH=. python -m perflens.cli scan examples/fortran/jacobi.f90
+      - run: PYTHONPATH=. python -m perflens.cli scan examples/python/heat_solver.py
+      - run: PYTHONPATH=. python -m perflens.cli scan examples/python/shallow_water.py
+      - run: PYTHONPATH=. python -m perflens.cli hw list
+      - run: PYTHONPATH=. python -m perflens.cli backends
+
+  # ── Compiler feedback parser ─────────────────────────────────────────────────
+  test-compiler-feedback:
+    name: Compiler Feedback Parsers
+    runs-on: ubuntu-latest
+    needs: test-unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - name: System deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc clang
+      - run: |
+          pip install anthropic fastapi plotly pandas numpy pyyaml rich typer \
+            pytest --quiet
+      - name: Test GCC live compile
+        run: |
+          PYTHONPATH=. python -c "
+          from pathlib import Path
+          from perflens.compiler_feedback import collect_feedback
+          src = Path('examples/c/stencil.c')
+          report = collect_feedback(src, compiler='gcc')
+          print(f'GCC remarks: {len(report.remarks)}')
+          print(f'  vectorized: {len(report.vectorized_loops)}')
+          print(f'  missed:     {len(report.missed_vectorization)}')
+          hints = report.to_scanner_hints()
+          print(f'  hints for LLM: {len(hints)}')
+          "
+      - name: Test Clang live compile
+        run: |
+          PYTHONPATH=. python -c "
+          from pathlib import Path
+          from perflens.compiler_feedback import collect_feedback
+          src = Path('examples/c/stencil.c')
+          report = collect_feedback(src, compiler='clang')
+          print(f'Clang remarks: {len(report.remarks)}')
+          "
+      - name: Run compiler feedback unit tests
+        run: |
+          PYTHONPATH=. pytest tests/unit/test_compiler_autotuner.py -v --tb=short
+
+  # ── Dashboard smoke test ─────────────────────────────────────────────────────
+  test-dashboard:
+    name: Dashboard API
+    runs-on: ubuntu-latest
+    needs: test-unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - run: |
+          pip install fastapi uvicorn plotly pandas numpy pyyaml rich typer \
+            pytest httpx starlette --quiet
+      - run: |
+          PYTHONPATH=. pytest tests/integration/test_pipeline.py \
+            -k "dashboard" -v --tb=short

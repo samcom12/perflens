@@ -2,80 +2,103 @@
 
 ## Overview
 
-PerfLens is structured as a six-layer pipeline, each layer independently usable via CLI or Python API.
+PerfLens is a seven-layer HPC code optimization pipeline. Every layer is
+independently usable via CLI or Python API. **No API key is required** —
+the rule-based engine optimizes code entirely offline.
 
 ```
-Source Code (C/C++/Fortran/Python)
+Source Code  (C / C++ / Fortran / Python)
         │
         ▼
-┌───────────────────────────────────────────────────────┐
-│  Layer 1: Scanner (perflens.scanner)                  │
-│  ─────────────────────────────────────────────────── │
-│  • C/C++: libclang AST walk + regex patterns          │
-│  • Fortran: fparser2 AST + line-level regex           │
-│  • Python: ast module visitor + pandas/numpy checks   │
-│  Output: List[Finding] (kind, severity, location,     │
-│          message, suggestion)                         │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Layer 2: Profiler (perflens.profiler)                │
-│  ─────────────────────────────────────────────────── │
-│  • VTune: CSV/XML parser (hotspots, TMA columns)      │
-│  • HPCToolkit: experiment.xml + hpcproftt CSV         │
-│  • Auto-discover result directories                   │
-│  Output: ProfileData (hotspots, roofline points,      │
-│          total_time_ms)                               │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Layer 3: Hardware DB (perflens.hardware)             │
-│  ─────────────────────────────────────────────────── │
-│  • Static profiles: A100, H100, V100, Intel SPR/ICX,  │
-│    AMD Genoa/Milan, A64FX, Graviton3                  │
-│  • Auto-detect via nvidia-smi + /proc/cpuinfo         │
-│  • Exposes: SIMD width, cache sizes, peak FLOP/s,     │
-│    memory bandwidth, GPU SM count, recommended flags  │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Layer 4: LLM Optimizer (perflens.optimizer)          │
-│  ─────────────────────────────────────────────────── │
-│  • Builds structured prompt from: source + findings   │
-│    + hotspots + hardware profile                      │
-│  • Calls Anthropic Claude API (claude-opus-4-5)       │
-│  • Parses JSON patch list from response               │
-│  • Extracts full rewritten source                     │
-│  • Iterates up to N rounds (feeds output back in)     │
-│  Output: List[OptimizationResult]                     │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Layer 5: Validator (perflens.validator)              │
-│  ─────────────────────────────────────────────────── │
-│  • Compile check (gcc/g++/gfortran/py_compile)        │
-│  • Test suite (pytest / ctest)                        │
-│  • Numerical diff (run() → compare arrays ≤ tol)      │
-│  • Diff sanity (>80% change = WARNING)                │
-│  • Compiler warning analysis (undefined, overflow)    │
-│  Output: ValidationReport (passed, checks[])         │
-└───────────────────┬───────────────────────────────────┘
-                    │
-                    ▼
-┌───────────────────────────────────────────────────────┐
-│  Layer 6: Dashboard (perflens.dashboard)              │
-│  ─────────────────────────────────────────────────── │
-│  • FastAPI REST API (/api/runs, /api/chart/*)         │
-│  • SQLite persistence (benchmark_run, hotspot,        │
-│    roofline_point tables)                             │
-│  • Plotly charts: timeline, speedup, roofline,        │
-│    hotspot flame bar                                  │
-│  • Single-page HTML dashboard (auto-refresh 30s)     │
-└───────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Layer 1 · Scanner  (perflens.scanner)                   │
+│  C/C++: libclang AST walk + regex                        │
+│  Fortran: fparser2 AST + line regex                      │
+│  Python: ast.NodeVisitor + pandas/numpy heuristics       │
+│  → List[Finding] (kind, severity, location, suggestion)  │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+        ┌──────────────▼──────────────┐
+        │  Layer 2 · Profiler         │  ← optional
+        │  VTune CSV/XML parser       │
+        │  HPCToolkit experiment.xml  │
+        │  → ProfileData (hotspots,   │
+        │    roofline points)         │
+        └──────────────┬──────────────┘
+                       │
+        ┌──────────────▼──────────────┐
+        │  Layer 3 · Compiler Feedback│  ← optional
+        │  GCC  -fopt-info            │
+        │  Clang -Rpass               │
+        │  ICX  .optrpt               │
+        │  → CompilerFeedbackReport   │
+        │    (missed vectorizations,  │
+        │     aliasing failures)      │
+        └──────────────┬──────────────┘
+                       │
+        ┌──────────────▼──────────────┐
+        │  Layer 4 · Hardware DB      │
+        │  9 built-in profiles        │
+        │  (A100/H100/V100, SPR/ICX,  │
+        │   Genoa/Milan, A64FX,       │
+        │   Graviton3)                │
+        │  Auto-detect via nvidia-smi │
+        └──────────────┬──────────────┘
+                       │
+        ┌──────────────▼──────────────────────────────────┐
+        │  Layer 5 · Optimizer  (perflens.optimizer)       │
+        │                                                  │
+        │  ┌─────────────────────────────────────────┐     │
+        │  │  Backend Registry                       │     │
+        │  │  rules      → RuleEngine (NO LLM) ✓    │     │
+        │  │  ollama     → Local Ollama server  ✓    │     │
+        │  │  lmstudio   → LM Studio local     ✓    │     │
+        │  │  llamacpp   → llama.cpp server    ✓    │     │
+        │  │  vllm       → vLLM local          ✓    │     │
+        │  │  groq       → Groq cloud (free)   ✓    │     │
+        │  │  openrouter → OpenRouter           ~    │     │
+        │  │  anthropic  → Claude API           *    │     │
+        │  │  ✓=no key  ~=free tier  *=paid         │     │
+        │  └─────────────────────────────────────────┘     │
+        │                                                  │
+        │  Rule Engine  (zero-LLM path):                   │
+        │   C/C++:  loop_tiling, openmp_parallel,          │
+        │            openmp_simd, openmp_offload,           │
+        │            mpi_nonblocking, division_hoist        │
+        │   Python: scalar_math→numpy, preallocate,         │
+        │            numba_annotate, pandas_vectorise       │
+        │   Fortran: implicit_none, openmp_do,              │
+        │             openmp_simd, mpi_nonblocking           │
+        │                                                  │
+        │  LLM path: structured prompt → JSON patches      │
+        │            → optimized source                    │
+        └──────────────┬───────────────────────────────────┘
+                       │
+        ┌──────────────▼──────────────┐
+        │  Layer 6 · Auto-Tuner       │  ← optional
+        │  Tile size sweep            │
+        │  Thread count sweep         │
+        │  Compile + time + compare   │
+        │  → TuneResult (best params) │
+        └──────────────┬──────────────┘
+                       │
+        ┌──────────────▼──────────────┐
+        │  Layer 7 · Validator        │
+        │  Compile check              │
+        │  pytest / ctest runner      │
+        │  Numerical diff (run())     │
+        │  Diff sanity gate           │
+        │  → ValidationReport         │
+        └──────────────┬──────────────┘
+                       │
+        ┌──────────────▼──────────────┐
+        │  Layer 8 · Dashboard        │
+        │  FastAPI REST API           │
+        │  SQLite persistence         │
+        │  Plotly: timeline, speedup, │
+        │  roofline, hotspot flame,   │
+        │  backend status panel       │
+        └─────────────────────────────┘
 ```
 
 ---
@@ -84,125 +107,210 @@ Source Code (C/C++/Fortran/Python)
 
 ```
 perflens/
-├── cli.py                        Typer CLI — top-level commands
+├── cli.py                          Typer CLI (scan/profile/optimize/validate/
+│                                   dashboard/backends/autotune/compiler/hw)
 ├── scanner/
-│   ├── models.py                 Finding, FindingKind, Severity
-│   ├── dispatcher.py             Language routing (ext → scanner)
-│   ├── clang_scanner.py          libclang AST + regex (C/C++)
-│   ├── fortran_scanner.py        fparser2 + line regex (Fortran)
-│   ├── python_scanner.py         ast.NodeVisitor (Python)
-│   └── report.py                 Rich terminal output
+│   ├── models.py                   Finding, FindingKind, Severity
+│   ├── dispatcher.py               Language routing
+│   ├── clang_scanner.py            libclang AST + regex (C/C++)
+│   ├── fortran_scanner.py          fparser2 + line regex
+│   ├── python_scanner.py           ast.NodeVisitor
+│   └── report.py                   Rich terminal output
 ├── profiler/
-│   ├── models.py                 ProfileData, Hotspot, RooflinePoint
-│   ├── dispatcher.py             Tool routing
-│   ├── vtune_parser.py           VTune CSV + XML parser
-│   └── hpctoolkit_parser.py      HPCToolkit experiment.xml + CSV
+│   ├── models.py                   ProfileData, Hotspot, RooflinePoint
+│   ├── dispatcher.py               Tool routing
+│   ├── vtune_parser.py             VTune CSV+XML (2021–2024 column aliases)
+│   └── hpctoolkit_parser.py        HPCToolkit experiment.xml + CSV
 ├── hardware/
-│   ├── models.py                 HardwareProfile, GPU/SIMD capability
-│   ├── database.py               Built-in profile registry
-│   └── detector.py               nvidia-smi + /proc/cpuinfo detection
+│   ├── models.py                   HardwareProfile, GPU/SIMD capability
+│   ├── database.py                 9 built-in profiles
+│   └── detector.py                 nvidia-smi + /proc/cpuinfo
 ├── optimizer/
-│   ├── models.py                 Patch, TransformKind, OptimizationResult
-│   ├── prompt_builder.py         Structured Claude prompt construction
-│   └── engine.py                 Iterative LLM optimization loop
+│   ├── backends/
+│   │   ├── base.py                 LLMBackend ABC + BackendCapabilities
+│   │   ├── anthropic_backend.py    Claude API (needs ANTHROPIC_API_KEY)
+│   │   ├── ollama_backend.py       Local Ollama (no key, /api/chat)
+│   │   ├── openai_compat_backend.py  vLLM/LM Studio/Groq/Together/…
+│   │   └── registry.py            create_backend() + list_backends()
+│   ├── rules/
+│   │   ├── base_rule.py            TransformRule ABC + RuleContext
+│   │   ├── c_rules.py              6 C/C++ rules
+│   │   ├── python_rules.py         4 Python rules
+│   │   ├── fortran_rules.py        4 Fortran rules
+│   │   └── rule_engine.py          RuleEngine + RuleEngineBackend shim
+│   ├── engine.py                   OptimizationEngine (backend-agnostic)
+│   ├── models.py                   Patch, TransformKind, OptimizationResult
+│   └── prompt_builder.py           Structured LLM prompt construction
+├── compiler_feedback/
+│   ├── __init__.py                 collect_feedback() dispatcher
+│   ├── models.py                   CompilerFeedbackReport, CompilerRemark
+│   ├── gcc_parser.py               GCC -fopt-info parser
+│   └── clang_parser.py             Clang -Rpass + ICX .optrpt parser
+├── autotuner/
+│   ├── __init__.py
+│   └── tile_tuner.py               TileSearchTuner + thread sweep
 ├── validator/
-│   ├── models.py                 ValidationReport, CheckResult, CheckStatus
-│   └── checker.py                Compile / test / diff / sanity checks
+│   ├── models.py                   ValidationReport, CheckResult
+│   └── checker.py                  Compile/test/diff/sanity checks
 ├── dashboard/
-│   └── app.py                    FastAPI app + Plotly chart builders
+│   └── app.py                      FastAPI + Plotly + backend status panel
 └── pipeline/
-    └── orchestrator.py           PerfLensPipeline (wires all layers)
+    └── orchestrator.py             PerfLensPipeline (all layers wired)
 ```
 
 ---
 
-## Data Flow
+## Backend Selection Guide
 
-```
-Source.c
-  └─► scan_file()                    → List[Finding]
-        └─► ClangScanner.scan()         (libclang AST + regex)
+| Backend | Key needed | Model | Best for |
+|---------|-----------|-------|----------|
+| `rules` | ❌ None | n/a | Fast, safe, offline, all HPC patterns |
+| `ollama` | ❌ None | codellama:34b | Best local quality for C/Fortran |
+| `ollama:llama3:8b` | ❌ None | llama3:8b | Fast local, good Python |
+| `lmstudio` | ❌ None | any | GUI-friendly local server |
+| `llamacpp` | ❌ None | GGUF models | Low-RAM local inference |
+| `vllm` | ❌ None | any HF model | GPU-accelerated local |
+| `groq` | `GROQ_API_KEY` | llama3-70b | Free tier, very fast |
+| `openrouter` | `OPENROUTER_API_KEY` | any | Free tier for many models |
+| `anthropic` | `ANTHROPIC_API_KEY` | claude-opus-4-5 | Highest quality |
 
-  └─► VTuneParser.parse()            → ProfileData
-        └─► .hotspots[0].cpu_time_pct   e.g. compute_flux 45.3%
+### Recommended models per language
 
-  └─► HardwareDatabase.get("a100")   → HardwareProfile
-        └─► .gpu.memory_bandwidth_gbs   2000 GB/s
-
-  └─► build_optimization_prompt()    → messages (Anthropic API format)
-        └─► Includes: source + findings + hotspots + hw
-
-  └─► OptimizationEngine.optimize()  → List[OptimizationResult]
-        └─► result.optimized_source     Full rewritten source
-
-  └─► PatchValidator.validate()      → ValidationReport
-        └─► .passed = True/False
-
-  └─► Dashboard POST /api/runs       → SQLite record
-        └─► GET /api/chart/speedup      Plotly bar chart
-```
+| Language | Recommended | Notes |
+|----------|-------------|-------|
+| C/C++ | `codellama:34b` or `deepseek-coder:33b` | Best for low-level optimizations |
+| Fortran | `codellama:34b` | Trained on Fortran scientific codes |
+| Python | `llama3:70b` or `qwen2.5-coder:32b` | Strong NumPy/Numba reasoning |
+| Mixed | `deepseek-coder:33b` | Balanced across all languages |
 
 ---
 
-## Prompt Structure
+## Rule Engine — Zero-LLM Path
 
-The LLM receives a structured prompt with four sections:
+The rule engine applies deterministic, safe source-level transformations:
 
-1. **Hardware context** — CPU cores, SIMD, cache sizes, memory BW, GPU specs, recommended compiler flags
-2. **Static findings** — top-N findings from the scanner (severity, location, message, suggestion)
-3. **Profiler hotspots** — top-10 by CPU%, with CPI, LLC miss rate, memory bound %, vectorisation %
-4. **Source code** — full file between code fences
+### C/C++ Rules (6)
+| Rule | What it does | Expected speedup |
+|------|-------------|-----------------|
+| `loop_tiling` | Tile triple-nested loops; tile size from L1 cache | 2–8× |
+| `openmp_parallel` | `#pragma omp parallel for` on outer loops | up to N_cores× |
+| `openmp_simd` | `#pragma omp simd` on inner loops | 2–8× |
+| `openmp_offload` | `#pragma omp target teams distribute` (GPU clusters) | 5–50× |
+| `mpi_nonblocking` | `MPI_Send/Recv` → `MPI_Isend/Irecv + MPI_Waitall` | 1.3–3× |
+| `division_hoist` | Hoist `/x` → `inv_x = 1.0/x` before loop | 1.2–3× |
 
-The response is expected in:
-```json
-{
-  "patches": [{ "transform_kind": "loop_tiling", "start_line": 42, ... }],
-  "explanation": "..."
-}
+### Python Rules (4)
+| Rule | What it does | Expected speedup |
+|------|-------------|-----------------|
+| `scalar_math_to_numpy` | `math.sin(x)` → `np.sin(x)` | 2–10× on arrays |
+| `preallocate_numpy` | Hoist `np.zeros` allocation before loop | 1.5–3× |
+| `numba_annotate` | `@njit(parallel=True)` on hot functions | 10–100× |
+| `pandas_vectorise` | Flag `.iterrows()`, insert vectorisation hints | 10–1000× |
+
+### Fortran Rules (4)
+| Rule | What it does | Expected speedup |
+|------|-------------|-----------------|
+| `implicit_none` | Insert `IMPLICIT NONE` | 1.0–1.3× (compiler quality) |
+| `fortran_openmp_do` | `!$OMP PARALLEL DO` on DO loops | up to N_cores× |
+| `fortran_omp_simd` | `!$OMP SIMD` on inner DO loops | 2–8× |
+| `fortran_mpi_nonblocking` | `MPI_SEND/RECV` → non-blocking | 1.3–3× |
+
+---
+
+## Compiler Feedback Integration
+
+```bash
+# Collect GCC missed-vectorization report alongside optimization:
+perflens optimize solver.c --backend rules --compiler-feedback
+
+# Or pre-collect and feed in:
+gcc -O3 -fopt-info-vec-missed solver.c -c 2> gcc.log
+perflens compiler solver.c --report gcc.log
+
+# ICX (Intel):
+icx -O3 -qopt-report=5 -qopt-report-file=solver.optrpt solver.c
+perflens compiler solver.c --compiler icx --report solver.optrpt
 ```
-Followed by `<optimized_source>…</optimized_source>`.
+
+The parser extracts missed vectorizations, aliasing failures, and dependency
+issues, then injects them as additional context into the optimizer prompt.
+
+---
+
+## Auto-Tuner
+
+```bash
+# First apply loop tiling (inserts #define TILE):
+perflens optimize solver.c --backend rules
+
+# Then sweep tile sizes empirically:
+perflens autotune solver_optimized_iter0.c --param tile --tiles 8,16,32,64,128
+
+# Sweep thread count:
+perflens autotune solver.c --param threads --threads 1,2,4,8,16,32
+
+# Output best config to JSON:
+perflens autotune solver.c --output tune_result.json
+```
 
 ---
 
 ## Extending PerfLens
 
+### Add a new rule
+
+```python
+# perflens/optimizer/rules/c_rules.py
+
+class PrefetchRule(TransformRule):
+    supported_languages = {"c", "cpp"}
+
+    @property
+    def name(self) -> str:
+        return "prefetch"
+
+    @property
+    def transform_kind(self) -> TransformKind:
+        return TransformKind.PREFETCH
+
+    def applies(self, ctx: RuleContext) -> bool:
+        return ctx.language in self.supported_languages and ctx.hardware.l2_kb >= 512
+
+    def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
+        # Insert __builtin_prefetch before inner loops
+        ...
+```
+
+Then add it to `_load_all_rules()` in `rule_engine.py`.
+
+### Add a new backend
+
+```python
+# perflens/optimizer/backends/my_backend.py
+
+class MyBackend(LLMBackend):
+    @property
+    def capabilities(self) -> BackendCapabilities:
+        return BackendCapabilities(
+            name="my-backend", requires_api_key=False, local=True,
+        )
+
+    def generate(self, system, messages, max_tokens=4096) -> str:
+        # Call your inference server
+        ...
+```
+
+Then add a case to `create_backend()` in `registry.py`.
+
 ### Add a new hardware profile
 
 ```python
 # perflens/hardware/database.py — inside _build_profiles()
-profiles["my_hw"] = HardwareProfile(
-    profile_id="my_hw",
-    name="My Custom HPC Node",
-    vendor="custom", arch="custom",
-    cores_per_socket=64, sockets=2, threads_per_core=2,
-    base_freq_ghz=2.4, boost_freq_ghz=3.6,
-    l1d_kb=32, l1i_kb=32, l2_kb=512, l3_mb=128,
-    memory_bandwidth_gbs=300.0, memory_capacity_gb=512,
-    memory_type="DDR5",
-    simd=SIMDCapability("AVX-512", 512),
-    peak_dp_gflops_socket=4096.0,
-    recommended_cflags=["-O3", "-march=native", "-fopenmp"],
+profiles["mi300x"] = HardwareProfile(
+    profile_id="mi300x",
+    name="AMD Instinct MI300X",
+    vendor="amd", arch="cdna3",
+    ...
+    gpu=GPUCapability(name="MI300X", arch="cdna3", sm_count=304, ...),
 )
 ```
-
-### Add a new scanner pattern
-
-```python
-# perflens/scanner/clang_scanner.py — _REGEX_PATTERNS list
-(
-    re.compile(r"__builtin_expect"),
-    FindingKind.GENERAL,
-    Severity.LOW,
-    "Manual branch-prediction hint found — verify it's still needed",
-    "Profile first; modern CPUs predict well without manual hints",
-),
-```
-
-### Add a new transform kind
-
-```python
-# perflens/optimizer/models.py — TransformKind enum
-POLYHEDRAL_TRANSFORM = "polyhedral_transform"
-```
-
-Then add it to the `transform_priority` list in `configs/perflens.yaml`.

@@ -31,7 +31,26 @@ profiler:
   # Top-N hotspots to surface to the LLM optimizer
   top_hotspots: 10
 
-# ── LLM optimizer settings ───────────────────────────────────────────────────
+# ── Optimizer backend ────────────────────────────────────────────────────────
+# No API key required for: rules, ollama, lmstudio, llamacpp, vllm
+# Free-tier cloud (small key): groq, openrouter, together
+# Paid: anthropic
+backend:
+  name: "rules"               # rules | ollama | ollama:<model> | groq | lmstudio |
+                              # llamacpp | vllm | openai-compat | anthropic
+
+  # Ollama settings (backend: ollama)
+  ollama:
+    host: "http://localhost:11434"
+    model: "codellama:34b"    # or: deepseek-coder:33b, llama3:8b, qwen2.5-coder:32b
+
+  # OpenAI-compatible server (backend: openai-compat / lmstudio / llamacpp / vllm)
+  openai_compat:
+    url: "http://localhost:1234/v1"
+    model: "local-model"
+    api_key: "local"          # set to env var name or literal key
+
+# ── Optimizer settings ───────────────────────────────────────────────────────
 optimizer:
   # Anthropic model to use
   model: "claude-opus-4-5"

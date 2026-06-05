@@ -16,6 +16,13 @@ profiler:
   tool: "vtune"
   top_hotspots: 10
 
+# No API key required — rule engine works on air-gapped compute nodes
+backend:
+  name: "rules"               # switch to ollama if model is pulled on login node
+  ollama:
+    host: "http://localhost:11434"
+    model: "codellama:34b"
+
 optimizer:
   model: "claude-opus-4-5"
   max_tokens: 8192

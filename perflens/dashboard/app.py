@@ -218,6 +218,16 @@ def create_app(db_path: Optional[Path] = None) -> FastAPI:
         fig = _make_roofline_chart([dict(r) for r in rows])
         return JSONResponse(json.loads(pio.to_json(fig)))
 
+    @app.get("/api/backends")
+    async def api_backends():
+        """Return availability of all optimizer backends."""
+        try:
+            from perflens.optimizer.backends.registry import list_backends
+            return list_backends()
+        except Exception as exc:
+            return [{"name": "rules", "available": True, "requires_key": False,
+                     "local": True, "notes": str(exc)}]
+
     @app.get("/api/chart/hotspots")
     async def chart_hotspots(run_id: Optional[int] = None):
         with _get_conn(db) as conn:
@@ -438,6 +448,12 @@ def _render_dashboard_html() -> str:
       <div class="stat"><div class="value" id="stat-files">—</div><div class="label">Source Files</div></div>
     </div>
 
+    <!-- Backend status -->
+    <div class="card">
+      <h2>⚙️ Optimization Backends</h2>
+      <div id="backends-grid" style="display:flex;flex-wrap:wrap;gap:0.75rem;margin-top:0.5rem"></div>
+    </div>
+
     <!-- Charts row 1 -->
     <div class="grid-2">
       <div class="card">
@@ -503,13 +519,29 @@ function speedupBadge(s) {
 }
 
 async function loadAll() {
-  const [runs, timeline, speedup, roofline, hotspots] = await Promise.all([
+  const [runs, timeline, speedup, roofline, hotspots, backends] = await Promise.all([
     fetchJSON('/api/runs'),
     fetchJSON('/api/chart/timeline'),
     fetchJSON('/api/chart/speedup'),
     fetchJSON('/api/chart/roofline'),
     fetchJSON('/api/chart/hotspots'),
+    fetchJSON('/api/backends'),
   ]);
+
+  // Backend status cards
+  if (backends) {
+    const grid = document.getElementById('backends-grid');
+    grid.innerHTML = backends.map(b => {
+      const dot   = b.available ? '🟢' : '🔴';
+      const key   = b.requires_key ? '<span style="font-size:0.65rem;color:var(--yellow)">key needed</span>' : '<span style="font-size:0.65rem;color:var(--green)">no key</span>';
+      const local = b.local ? '<span style="font-size:0.65rem;color:var(--accent)">local</span>' : '<span style="font-size:0.65rem;color:var(--muted)">cloud</span>';
+      return `<div class="stat" style="min-width:130px;max-width:170px">
+        <div class="value" style="font-size:1rem">${dot} ${b.name}</div>
+        <div style="margin-top:4px">${key} &nbsp; ${local}</div>
+        <div style="font-size:0.68rem;color:var(--muted);margin-top:2px">${(b.notes||'').slice(0,60)}</div>
+      </div>`;
+    }).join('');
+  }
 
   // Stats
   if (runs) {

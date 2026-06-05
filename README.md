@@ -47,29 +47,50 @@ PerfLens is an end-to-end automation framework that statically analyzes, profile
 | Module | Description |
 |--------|-------------|
 | `perflens.scanner` | Clang AST / libclang static analysis — loop patterns, memory access, vectorization hints, OpenMP/MPI idioms |
-| `perflens.profiler` | VTune XML/CSV and HPCToolkit database parsers — hotspot extraction, roofline data collection |
+| `perflens.profiler` | VTune XML/CSV and HPCToolkit database parsers — hotspot extraction, roofline data |
 | `perflens.hardware` | Hardware capability database — cache hierarchy, SIMD width, memory bandwidth, GPU SM counts, roofline peaks |
-| `perflens.optimizer` | LLM-powered code transformation engine — loop tiling, vectorization, OpenMP offload, memory layout changes |
-| `perflens.validator` | Automatic patch validator — compile check, test harness execution, numerical diff, regression gate |
-| `perflens.dashboard` | FastAPI + Plotly benchmark comparison dashboard — runtime charts, roofline plots, iteration history |
+| `perflens.optimizer.rules` | **Zero-LLM rule engine** — 14 source-level transforms for C/C++/Python/Fortran; no key required |
+| `perflens.optimizer.backends` | Multi-backend system: `rules` \| `ollama` \| `lmstudio` \| `llamacpp` \| `vllm` \| `groq` \| `anthropic` |
+| `perflens.optimizer` | Backend-agnostic optimization engine — iterative, multi-round |
+| `perflens.compiler_feedback` | GCC `-fopt-info`, Clang `-Rpass`, ICX `.optrpt` parsers — missed vectorizations, aliasing |
+| `perflens.autotuner` | Empirical tile size and thread count sweep — compile + run + compare |
+| `perflens.validator` | Automatic patch validator — compile check, test harness, numerical diff, regression gate |
+| `perflens.dashboard` | FastAPI + Plotly benchmark dashboard — runtime charts, roofline, backend status panel |
 | `perflens.pipeline` | Orchestrator that wires all modules into a single `perflens optimize` CLI run |
 
 ---
 
-## Quickstart
+## Quickstart — No API Key Needed
 
 ```bash
 # Install
-pip install -e ".[dev]"
+git clone https://github.com/samcom12/perflens && cd perflens
+pip install -e .
 
-# Detect hardware profile
-perflens hw detect
+# Option A: Rule engine — zero LLM, fully offline
+perflens optimize examples/c/stencil.c --backend rules --hw a100
+perflens optimize examples/python/heat_solver.py --backend rules
 
-# Scan a source file for optimization opportunities
-perflens scan src/solver.c
+# Option B: Local Ollama (pull a model once)
+ollama pull codellama:34b
+perflens optimize examples/c/stencil.c --backend ollama
 
-# Full optimization pipeline (scan → profile → optimize → validate)
-perflens optimize src/solver.c --hw a100 --profile vtune_report.csv
+# Option C: Groq free tier (fast, only needs GROQ_API_KEY)
+export GROQ_API_KEY=gsk_...
+perflens optimize examples/c/stencil.c --backend groq
+
+# Option D: Anthropic Claude (highest quality)
+export ANTHROPIC_API_KEY=sk-ant-...
+perflens optimize examples/c/stencil.c --backend anthropic --hw a100
+
+# See which backends are ready on your machine
+perflens backends
+
+# Auto-tune tile sizes empirically (no key)
+perflens autotune examples/c/stencil_optimized_iter0.c --param tile
+
+# Collect compiler missed-vectorization feedback (no key)
+perflens compiler examples/c/stencil.c --compiler gcc
 
 # Launch benchmark dashboard
 perflens dashboard --port 8080
