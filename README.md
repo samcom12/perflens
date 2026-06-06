@@ -60,7 +60,35 @@ PerfLens is an end-to-end automation framework that statically analyzes, profile
 
 ---
 
-## Quickstart — No API Key Needed
+## Whole-Project Optimization
+
+For large HPC codebases with many files:
+
+```bash
+# Discover files and dependencies
+perflens project scan ./my_solver --deps
+
+# Build + auto-collect compiler optimization reports
+perflens project build ./my_solver --hw a100
+
+# Full pipeline — rule engine, zero API key
+perflens project optimize ./my_solver --backend rules --hw a100
+
+# Review diffs before applying
+perflens project diff ./my_solver
+
+# Apply validated patches back to source tree
+perflens project optimize ./my_solver --backend rules --apply
+```
+
+The project pipeline runs 7 steps automatically:
+**Crawl → Build+CompilerReports → Profile → Scan → Plan → Optimize → Validate**
+
+Files are prioritized by a combined score: `60% hotspot CPU% + 25% compiler missed vectorizations + 15% scanner severity`.
+
+## Single-File Optimization — No API Key Needed
+
+
 
 ```bash
 # Install

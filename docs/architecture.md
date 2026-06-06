@@ -314,3 +314,104 @@ profiles["mi300x"] = HardwareProfile(
     gpu=GPUCapability(name="MI300X", arch="cdna3", sm_count=304, ...),
 )
 ```
+
+---
+
+## Project-Level Workflow (perflens project)
+
+For large HPC codebases with hundreds of files, use the project commands:
+
+```
+perflens/project/
+├── models.py          ProjectGraph, SourceFile, OptimizationPhase,
+│                      ProjectOptimizationPlan, ProjectOptimizationResult
+├── crawler.py         Walk directory tree, detect build system,
+│                      parse #include/USE/import dependencies
+├── build_system.py    CMake / Make / Meson / bare build drivers;
+│                      injects -fopt-info / -Rpass automatically
+└── dependency_graph.py  Topological sort, transitive-dependent
+                          analysis, shared-header detection
+perflens/optimizer/
+└── project_optimizer.py  Phase-based multi-file optimizer;
+                           unified context (hotspot + compiler + scanner)
+perflens/pipeline/
+└── project_pipeline.py   End-to-end 7-step project orchestrator
+```
+
+### 7-step project pipeline
+
+```
+Step 1  Crawl      Discover all source files + dependency graph
+Step 2  Build      Compile project; inject -fopt-info/-Rpass automatically
+Step 3  Profile    Run binary under VTune/HPCToolkit; map % CPU to files
+Step 4  Scan       Parallel static analysis on every source file
+Step 5  Plan       Build priority-ordered optimization phases
+Step 6  Optimize   Apply rules + LLM per phase; validate after each
+Step 7  Apply      Copy validated patches back into source tree
+```
+
+### File priority scoring
+
+Each `SourceFile` gets a **priority score** (0–100):
+
+```
+score = 0.60 × hotspot_pct          (profiler — direct CPU cost)
+      + 0.25 × min(miss_count×2, 25) (compiler missed vectorizations)
+      + 0.15 × scanner_severity_sum  (static analysis findings)
+```
+
+Files are optimized highest-score first. Files transitively called by
+hotspot files are included in Phase 1 (propagation phase).
+
+### Project CLI commands
+
+```bash
+# Discover files and dependency graph
+perflens project scan ./my_hpc_code --deps
+
+# Build + collect compiler reports (no LLM needed)
+perflens project build ./my_hpc_code --hw a100
+
+# Full pipeline — zero API key with rule engine
+perflens project optimize ./my_hpc_code --backend rules --no-build
+
+# Full pipeline with profiler data
+perflens project optimize ./my_hpc_code \
+    --backend rules \
+    --binary ./build/solver \
+    --hw a100
+
+# With LLM for richer transforms (after Ollama pull)
+perflens project optimize ./my_hpc_code \
+    --backend ollama:codellama:34b \
+    --top-n 5
+
+# Review what changed
+perflens project diff ./my_hpc_code
+perflens project status ./my_hpc_code
+
+# Apply patches back to source tree
+perflens project optimize ./my_hpc_code --apply
+```
+
+### Compiler report auto-collection
+
+The build driver **automatically injects** the right flags per compiler:
+
+| Compiler | Flags injected | Report format |
+|----------|---------------|--------------|
+| GCC / gfortran | `-fopt-info-vec-optimized -fopt-info-vec-missed` | stderr text |
+| Clang / clang++ | `-Rpass=loop-vectorize -Rpass-missed=loop-vectorize` | stderr text |
+| ICX / IFORT | `-qopt-report=5 -qopt-report-file=<f>.optrpt` | `.optrpt` file |
+
+The collected reports are parsed and attached to each `SourceFile` before
+the optimizer runs, so the LLM/rule engine sees exactly which loops failed
+to vectorize and why.
+
+### Inter-file safety rules
+
+- Shared headers (included by ≥ 3 files) are **never modified** — too risky
+- Function signatures in headers are preserved
+- Patched files go to `perflens_patches/` (mirroring the source tree)
+- Original source is only replaced after `--apply` + validation pass
+- Backup `.perflens_backup` files are created automatically before apply

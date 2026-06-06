@@ -38,8 +38,10 @@ app = typer.Typer(
 )
 console = Console()
 
-hw_app = typer.Typer(help="Hardware database commands")
-app.add_typer(hw_app, name="hw")
+hw_app      = typer.Typer(help="Hardware database commands")
+project_app = typer.Typer(help="Whole-project optimization workflow")
+app.add_typer(hw_app,      name="hw")
+app.add_typer(project_app, name="project")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -359,8 +361,250 @@ def hw_show(profile_id: str = typer.Argument(...)):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# perflens project  — whole-codebase workflow
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _version_callback(value: bool):
+@project_app.command("scan")
+def project_scan(
+    root: Path = typer.Argument(..., help="Project root directory"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o",
+        help="Write project graph JSON here"),
+    extensions: str = typer.Option("", "--ext",
+        help="Comma-separated extensions to include, e.g. .c,.cpp"),
+    show_deps: bool = typer.Option(False, "--deps", help="Show dependency table"),
+):
+    """[bold cyan]Crawl a project directory[/bold cyan] — discover all source files and dependencies."""
+    from perflens.project.crawler import ProjectCrawler
+
+    console.print(Panel(f"[bold]PerfLens Project Scan[/bold]  {root}", style="cyan"))
+
+    ext_set = {e.strip() for e in extensions.split(",") if e.strip()} or None
+    crawler = ProjectCrawler(root=root, extensions=ext_set)
+    graph   = crawler.crawl()
+    graph.print_summary(console)
+
+    if show_deps:
+        from perflens.project.dependency_graph import DependencyGraph
+        dg = DependencyGraph(graph)
+        shared = dg.shared_headers()
+        if shared:
+            console.print(f"\n[bold]Shared headers ({len(shared)}):[/bold]")
+            for h in shared[:10]:
+                callers = len(dg._in.get(h, set()))
+                console.print(f"  [cyan]{h.name}[/cyan] — included by {callers} files")
+
+    if output:
+        import json
+        data = {
+            "root":         str(graph.root),
+            "build_system": graph.build_system.value,
+            "files":        [sf.to_dict() for sf in graph.source_files],
+        }
+        output.write_text(json.dumps(data, indent=2))
+        console.print(f"[green]Graph → {output}[/green]")
+
+
+@project_app.command("build")
+def project_build(
+    root: Path = typer.Argument(..., help="Project root directory"),
+    hw: str    = typer.Option("auto", "--hw"),
+    jobs: int  = typer.Option(0, "--jobs", "-j", help="Parallel build jobs (0=auto)"),
+    no_build: bool = typer.Option(False, "--no-build",
+        help="Skip compilation, only collect compiler feedback"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o"),
+):
+    """[bold cyan]Build project[/bold cyan] and collect compiler optimisation reports automatically."""
+    from perflens.project.crawler import ProjectCrawler
+    from perflens.project.build_system import BuildDriver
+    from perflens.hardware.database import HardwareDatabase
+    from perflens.hardware.detector import detect_hardware
+
+    console.print(Panel(f"[bold]PerfLens Project Build[/bold]  {root}", style="cyan"))
+
+    db_hw    = HardwareDatabase()
+    hardware = detect_hardware() if hw == "auto" else db_hw.get(hw)
+    if hardware is None:
+        console.print(f"[red]Unknown hw profile '{hw}'[/red]"); raise typer.Exit(1)
+
+    graph  = ProjectCrawler(root=root).crawl()
+    driver = BuildDriver(graph=graph, hardware=hardware, jobs=jobs)
+
+    if no_build:
+        console.print("[dim]Collecting compiler feedback without rebuild…[/dim]")
+        driver.collect_compiler_feedback_only()
+    else:
+        ok = driver.build()
+        status = "[green]✓ Build succeeded[/green]" if ok else "[red]✗ Build failed[/red]"
+        console.print(status)
+
+    c_ok = sum(1 for sf in graph.files.values() if sf.compiler_feedback)
+    console.print(f"  Compiler reports attached: {c_ok} files")
+
+    for sf in sorted(graph.source_files, key=lambda s: s.priority_score, reverse=True)[:5]:
+        if sf.compiler_feedback:
+            fb   = sf.compiler_feedback
+            miss = len(fb.missed_vectorization)
+            vec  = len(fb.vectorized_loops)
+            console.print(f"  [cyan]{sf.path.name}[/cyan]  "
+                          f"vec={vec}  missed={miss}")
+
+    if output:
+        import json
+        output.write_text(json.dumps(
+            {"files": [sf.to_dict() for sf in graph.source_files]}, indent=2))
+        console.print(f"[green]Report → {output}[/green]")
+
+
+@project_app.command("optimize")
+def project_optimize(
+    root: Path = typer.Argument(..., help="Project root directory"),
+    hw: str    = typer.Option("auto", "--hw"),
+    backend: str = typer.Option("rules", "--backend", "-b",
+        help="rules | ollama | ollama:<model> | groq | anthropic | …"),
+    no_build:  bool = typer.Option(False, "--no-build"),
+    binary:    Optional[Path] = typer.Option(None, "--binary",
+        help="Built executable to profile"),
+    profile_report: Optional[Path] = typer.Option(None, "--profile", "-p"),
+    profile_tool:   str = typer.Option("vtune", "--profile-tool"),
+    top_n:     int  = typer.Option(10, "--top-n",
+        help="Number of hotspot files to prioritise"),
+    validate:  bool = typer.Option(True, "--validate/--no-validate"),
+    apply:     bool = typer.Option(False, "--apply",
+        help="Copy patches back into source tree after validation"),
+    dry_run:   bool = typer.Option(False, "--dry-run"),
+    jobs:      int  = typer.Option(0, "--jobs", "-j"),
+    # Backend-specific
+    ollama_model:  str = typer.Option("codellama:34b", "--ollama-model"),
+    ollama_host:   str = typer.Option("http://localhost:11434", "--ollama-host"),
+    compat_url:    Optional[str] = typer.Option(None, "--compat-url"),
+    compat_model:  Optional[str] = typer.Option(None, "--compat-model"),
+    compat_key:    Optional[str] = typer.Option(None, "--compat-key"),
+):
+    """[bold green]Full project optimization pipeline[/bold green] — crawl → build → profile → scan → optimize → validate."""
+    from perflens.pipeline.project_pipeline import ProjectPipeline
+
+    console.print(Panel(
+        f"[bold green]PerfLens Project Optimize[/bold green]  "
+        f"root=[white]{root}[/white]  "
+        f"backend=[yellow]{backend}[/yellow]  "
+        f"hw=[cyan]{hw}[/cyan]",
+        style="green",
+    ))
+
+    pipeline = ProjectPipeline(
+        root=root,
+        hw_profile=hw,
+        backend=backend,
+        build=not no_build,
+        profile_binary=binary,
+        profile_tool=profile_tool,
+        profile_report=profile_report,
+        top_hotspot_n=top_n,
+        validate=validate,
+        apply_patches=apply,
+        dry_run=dry_run,
+        console=console,
+        ollama_model=ollama_model,
+        ollama_host=ollama_host,
+        compat_url=compat_url,
+        compat_model=compat_model,
+        compat_key=compat_key,
+    )
+    result = pipeline.run()
+    raise typer.Exit(0 if result.success else 1)
+
+
+@project_app.command("status")
+def project_status(
+    root: Path = typer.Argument(..., help="Project root directory"),
+    patch_dir: Optional[Path] = typer.Option(None, "--patch-dir"),
+):
+    """[bold]Show optimization status[/bold] — which files have patches ready."""
+    from perflens.project.crawler import ProjectCrawler
+    from rich.table import Table
+    from rich import box as rbox
+
+    graph     = ProjectCrawler(root=root).crawl()
+    pd        = patch_dir or (root / "perflens_patches")
+
+    table = Table(title=f"Patch Status — {root.name}", box=rbox.ROUNDED)
+    table.add_column("File",    width=35)
+    table.add_column("Lang",    width=7)
+    table.add_column("Patched", width=9, justify="center")
+    table.add_column("Patch path")
+
+    patched = 0
+    for sf in graph.source_files:
+        rel         = sf.path.relative_to(root)
+        patch_path  = pd / rel
+        has_patch   = patch_path.exists()
+        if has_patch:
+            patched += 1
+        table.add_row(
+            sf.path.name[:34],
+            sf.language,
+            "[green]✓[/green]" if has_patch else "—",
+            str(patch_path) if has_patch else "",
+        )
+
+    console.print(table)
+    console.print(f"\nTotal: {patched}/{len(graph.source_files)} files patched")
+    console.print(f"Patch dir: {pd}")
+
+
+@project_app.command("diff")
+def project_diff(
+    root: Path = typer.Argument(..., help="Project root directory"),
+    patch_dir: Optional[Path] = typer.Option(None, "--patch-dir"),
+    file_filter: str = typer.Option("", "--file",
+        help="Only show diff for files matching this name"),
+):
+    """[bold]Show unified diff[/bold] between original and patched files."""
+    import difflib
+    from perflens.project.crawler import ProjectCrawler
+
+    graph = ProjectCrawler(root=root).crawl()
+    pd    = patch_dir or (root / "perflens_patches")
+
+    if not pd.exists():
+        console.print(f"[yellow]No patch directory at {pd}[/yellow]")
+        raise typer.Exit(0)
+
+    found = 0
+    for sf in graph.source_files:
+        if file_filter and file_filter not in sf.path.name:
+            continue
+        rel        = sf.path.relative_to(root)
+        patch_path = pd / rel
+        if not patch_path.exists():
+            continue
+
+        orig   = sf.path.read_text(errors="replace").splitlines(keepends=True)
+        patched = patch_path.read_text(errors="replace").splitlines(keepends=True)
+        diff    = list(difflib.unified_diff(
+            orig, patched,
+            fromfile=f"a/{rel}",
+            tofile=f"b/{rel}",
+            n=3,
+        ))
+        if diff:
+            found += 1
+            changed = sum(1 for l in diff if l.startswith(("+", "-"))
+                          and not l.startswith(("+++", "---")))
+            console.print(f"\n[bold cyan]{'─'*60}[/bold cyan]")
+            console.print(f"[bold]{rel}[/bold]  "
+                          f"[green]+{sum(1 for l in diff if l.startswith('+') and not l.startswith('+++'))}[/green]"
+                          f"[red] -{sum(1 for l in diff if l.startswith('-') and not l.startswith('---'))}[/red]"
+                          f"  ({changed} lines changed)")
+            from rich.syntax import Syntax
+            console.print(Syntax("".join(diff[:120]), "diff",
+                                 theme="monokai", line_numbers=False))
+
+    if found == 0:
+        console.print("[dim]No diffs found.[/dim]")
+
+
+
     if value:
         console.print(f"perflens {__version__}")
         raise typer.Exit()

@@ -179,3 +179,56 @@ perflens autotune src/anuga_solver_optimized_iter0.c \
 # View results
 perflens dashboard &   # open http://localhost:8080 via SSH tunnel
 ```
+
+---
+
+## Whole-Project Optimization (No Key)
+
+For large codebases — not just single files:
+
+```bash
+# Crawl the codebase and see what PerfLens finds
+perflens project scan ./my_hpc_solver --deps
+
+# Build + collect compiler reports automatically (GCC/Clang/ICX)
+perflens project build ./my_hpc_solver --hw a100
+
+# Optimize the whole project with the rule engine (zero key)
+perflens project optimize ./my_hpc_solver \
+    --backend rules \
+    --no-build \
+    --hw a100
+
+# See what changed
+perflens project diff ./my_hpc_solver
+
+# Apply the patches back to the source tree
+perflens project optimize ./my_hpc_solver \
+    --backend rules --apply
+
+# Check status of all patches
+perflens project status ./my_hpc_solver
+```
+
+### ANUGA / large Fortran+Python projects
+
+```bash
+# Clone your codebase
+git clone https://github.com/samcom12/anuga_core my_anuga
+cd perflens
+
+# Run project optimizer — rules backend, A100 target
+perflens project optimize ../my_anuga \
+    --backend rules \
+    --hw a100 \
+    --no-build \
+    --top-n 10
+
+# Then upgrade to Ollama for richer transforms
+ollama pull codellama:34b
+perflens project optimize ../my_anuga \
+    --backend ollama:codellama:34b \
+    --hw a100 \
+    --no-build \
+    --top-n 5
+```

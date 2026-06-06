@@ -187,7 +187,59 @@ jobs:
         run: |
           PYTHONPATH=. pytest tests/unit/test_compiler_autotuner.py -v --tb=short
 
-  # ── Dashboard smoke test ─────────────────────────────────────────────────────
+  # ── Project pipeline (whole-codebase) ──────────────────────────────────────
+  test-project:
+    name: Project Pipeline
+    runs-on: ubuntu-latest
+    needs: test-unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip }
+      - name: System deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends gcc g++ gfortran
+      - name: Python deps
+        run: |
+          pip install anthropic fastapi uvicorn plotly pandas numpy pyyaml \
+            rich typer pytest httpx starlette --quiet
+      - name: Run project unit tests
+        run: PYTHONPATH=. pytest tests/unit/project/ -v --tb=short
+      - name: Crawl example project
+        run: |
+          PYTHONPATH=. python -c "
+          from pathlib import Path
+          from perflens.project.crawler import ProjectCrawler
+          graph = ProjectCrawler(root=Path('examples/project_hello')).crawl()
+          print(f'Files:  {len(graph.files)}')
+          print(f'Source: {len(graph.source_files)}')
+          print(f'Build:  {graph.build_system.value}')
+          assert len(graph.source_files) >= 3
+          print('OK')
+          "
+      - name: Run project pipeline (rules, no build)
+        run: |
+          PYTHONPATH=. python -c "
+          from pathlib import Path
+          from perflens.pipeline.project_pipeline import ProjectPipeline
+          r = ProjectPipeline(
+              root=Path('examples/project_hello'),
+              hw_profile='a100',
+              backend='rules',
+              build=False,
+              validate=False,
+          ).run()
+          print(f'optimized={r.files_optimized}  patches={r.total_patches}')
+          assert r.error is None
+          print('OK')
+          "
+      - name: Test project CLI commands
+        run: |
+          PYTHONPATH=. python -m perflens.cli project scan examples/project_hello
+          PYTHONPATH=. python -m perflens.cli project status examples/project_hello
+
+
   test-dashboard:
     name: Dashboard API
     runs-on: ubuntu-latest
