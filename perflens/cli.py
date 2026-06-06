@@ -604,7 +604,9 @@ def project_diff(
         console.print("[dim]No diffs found.[/dim]")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
 
+def _version_callback(value: bool):
     if value:
         console.print(f"perflens {__version__}")
         raise typer.Exit()

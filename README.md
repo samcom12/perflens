@@ -175,12 +175,20 @@ export PERFLENS_LOG_LEVEL=INFO
 
 ## Roadmap
 
+- [x] Multi-backend system (rules / Ollama / LM Studio / Groq / Anthropic)
+- [x] Zero-API-key rule engine (14 transforms, 4 languages)
+- [x] GCC / Clang / ICX compiler feedback parsers
+- [x] Empirical auto-tuner (tile size + thread count)
+- [x] Whole-project pipeline (crawl → build → profile → scan → optimize → validate)
+- [x] Build system integration (CMake / Make / Meson / bare)
+- [x] Dependency graph analysis + topological optimization order
+- [x] Benchmark dashboard (FastAPI + Plotly)
 - [ ] LLVM IR-level analysis pass
-- [ ] Polyhedral model integration (isl / Pluto)
-- [ ] Auto-tuning parameter sweep (OpenTuner integration)
+- [ ] Polyhedral model integration (Pluto / isl)
+- [ ] AMD MI300X hardware profile
 - [ ] MLIR codegen backend
-- [ ] CI/CD GitHub Actions workflow template
-- [ ] Roofline model auto-generation from hardware profiles
+- [ ] OpenTuner parameter sweep integration
+- [ ] Persistent optimization history across runs
 
 ---
 
