@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "perflens"
@@ -9,7 +9,7 @@ description = "Automated HPC code optimization framework for C/C++/Fortran/Pytho
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "Samir", github = "samcom12" }]
+authors = [{ name = "Samir" }]
 keywords = ["hpc", "performance", "optimization", "llm", "clang", "mpi", "openmp"]
 
 dependencies = [
@@ -41,6 +41,10 @@ dev = [
 
 [project.scripts]
 perflens = "perflens.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["perflens*"]
+exclude = ["tests*", "examples*", "docs*", "configs*", "scripts*"]
 
 [tool.ruff]
 line-length = 100
