@@ -27,6 +27,10 @@ class CheckResult:
     stdout: str = ""
     stderr: str = ""
     duration_s: float = 0.0
+    # When True, a SKIP of this check means we could NOT establish correctness,
+    # so the overall report must not be considered "passed" for a patch that
+    # changes program semantics. This closes the silent-skip hole.
+    critical: bool = False
 
 
 @dataclass
@@ -36,15 +40,43 @@ class ValidationReport:
     checks: list[CheckResult] = field(default_factory=list)
     numerical_diff_max: Optional[float] = None
     tolerance: float = 1e-6
+    # Set by the validator: True if the patch is known to alter program
+    # behaviour in a way that REQUIRES a numerical/test check to be trusted.
+    semantics_may_change: bool = False
+    # Set True once correctness was positively established (tests passed or
+    # numerical diff within tolerance).
+    correctness_verified: bool = False
 
     @property
     def passed(self) -> bool:
-        return all(c.status in (CheckStatus.PASS, CheckStatus.SKIP, CheckStatus.WARNING)
-                   for c in self.checks)
+        # Any hard failure → fail.
+        if any(c.status == CheckStatus.FAIL for c in self.checks):
+            return False
+        # A critical check that was skipped means we could not verify
+        # something essential → fail closed (do NOT mark as passed).
+        if any(c.critical and c.status == CheckStatus.SKIP for c in self.checks):
+            return False
+        # If the patch may change numerical results, correctness must have
+        # been positively verified (tests or numerical diff), not just skipped.
+        if self.semantics_may_change and not self.correctness_verified:
+            return False
+        return True
+
+    @property
+    def verdict(self) -> str:
+        if self.passed:
+            return "passed"
+        if any(c.status == CheckStatus.FAIL for c in self.checks):
+            return "failed"
+        return "unverified"   # compiled but correctness could not be established
 
     def print(self, console: Console) -> None:
-        overall = "[bold green]✓ PASSED[/bold green]" if self.passed else "[bold red]✗ FAILED[/bold red]"
-        console.print(f"\nValidation: {overall}")
+        _verdict_str = {
+            "passed":     "[bold green]✓ PASSED[/bold green]",
+            "failed":     "[bold red]✗ FAILED[/bold red]",
+            "unverified": "[bold yellow]⚠ UNVERIFIED (correctness not established)[/bold yellow]",
+        }[self.verdict]
+        console.print(f"\nValidation: {_verdict_str}")
 
         table = Table(title="Validation Checks", box=box.ROUNDED, show_lines=True)
         table.add_column("Check",    width=28)

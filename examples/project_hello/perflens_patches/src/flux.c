@@ -18,14 +18,16 @@ void roe_flux(const double *hL, const double *hR,
               double *flux_h, double *flux_u,
               int n, double g)
 {
-        const double inv_double = 1.0 / double;
-#pragma omp parallel for schedule(static)
-for (int i = 0; i < n; i++) {
-        double sqrtL = sqrt(hL[i]);               /* ANTI-PATTERN: sqrt in loop ** inv_double sqrtR = sqrt(hR[i]);
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < n; i++) {
+        double sqrtL = sqrt(hL[i]);               /* ANTI-PATTERN: sqrt in loop */
+        double sqrtR = sqrt(hR[i]);
 
         double hRoe  = 0.5 * (hL[i] + hR[i]);
         double uRoe  = (sqrtL * uL[i] + sqrtR * uR[i]) / (sqrtL + sqrtR + 1e-10);
-        double cRoe  = sqrt(g * hRoe);            /* ANTI-PATTERN: sqrt in loop ** inv_double lambda1 = uRoe - cRoe;
+        double cRoe  = sqrt(g * hRoe);            /* ANTI-PATTERN: sqrt in loop */
+
+        double lambda1 = uRoe - cRoe;
         double lambda2 = uRoe + cRoe;
         double sMax    = fmax(fabs(lambda1), fabs(lambda2));
 

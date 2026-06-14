@@ -220,7 +220,11 @@ class PerfLensPipeline:
                 )
 
         for i, vr in enumerate(result.validation_reports):
-            status = "[green]PASS[/green]" if vr.passed else "[red]FAIL[/red]"
+            status = {
+                "passed":     "[green]PASS[/green]",
+                "failed":     "[red]FAIL[/red]",
+                "unverified": "[yellow]UNVERIFIED[/yellow]",
+            }.get(vr.verdict, "[red]FAIL[/red]")
             console.print(f"Validation iter {i+1}: {status}")
 
         console.print(

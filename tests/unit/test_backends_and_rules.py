@@ -193,16 +193,16 @@ def _make_ctx(source, language, hw, findings=None):
 
 
 class TestOpenMPParallelRule:
-    def test_applies_multicores(self, hw_a100):
+    def test_applies_multicores(self, hw_intel):
         from perflens.optimizer.rules.c_rules import OpenMPParallelRule
         r = OpenMPParallelRule()
-        ctx = _make_ctx(C_PARALLEL_LOOP, "c", hw_a100)
+        ctx = _make_ctx(C_PARALLEL_LOOP, "c", hw_intel)
         assert r.applies(ctx)
 
-    def test_inserts_pragma(self, hw_a100):
+    def test_inserts_pragma(self, hw_intel):
         from perflens.optimizer.rules.c_rules import OpenMPParallelRule
         r   = OpenMPParallelRule()
-        ctx = _make_ctx(C_PARALLEL_LOOP, "c", hw_a100)
+        ctx = _make_ctx(C_PARALLEL_LOOP, "c", hw_intel)
         result = r.apply(ctx)
         assert result is not None
         new_src, patches = result
@@ -210,17 +210,17 @@ class TestOpenMPParallelRule:
         assert len(patches) >= 1
         assert patches[0].expected_speedup is not None
 
-    def test_does_not_duplicate(self, hw_a100):
+    def test_does_not_duplicate(self, hw_intel):
         from perflens.optimizer.rules.c_rules import OpenMPParallelRule
         r   = OpenMPParallelRule()
         src = "#pragma omp parallel for\n" + C_PARALLEL_LOOP
-        ctx = _make_ctx(src, "c", hw_a100)
+        ctx = _make_ctx(src, "c", hw_intel)
         assert not r.applies(ctx)
 
-    def test_not_applicable_python(self, hw_a100):
+    def test_not_applicable_python(self, hw_intel):
         from perflens.optimizer.rules.c_rules import OpenMPParallelRule
         r   = OpenMPParallelRule()
-        ctx = _make_ctx("for i in range(n): pass", "python", hw_a100)
+        ctx = _make_ctx("for i in range(n): pass", "python", hw_intel)
         assert not r.applies(ctx)
 
 

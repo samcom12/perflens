@@ -5,7 +5,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [0.3.0] — Project-Level Workflow
+## [0.3.1] — Correctness Fixes (main-branch audit)
+
+This release fixes a class of bugs where the framework could emit
+non-compiling or numerically-wrong "optimized" code and still report success.
+The central fix makes validation **fail closed**: a semantics-changing patch
+is never accepted unless its correctness is positively established.
+
+### Fixed
+- **Validator fail-closed gate** (`validator/models.py`): `ValidationReport.passed`
+  previously treated `SKIP`/`WARNING` as success. It now fails when a *critical*
+  check is skipped, and when a patch may change numerical results but correctness
+  was not verified. Added `verdict` (`passed`/`failed`/`unverified`).
+- **Automatic test-harness generation** (`validator/harness.py`, new): compiled
+  C/C++ kernels are now verified for numerical equivalence by synthesising a
+  seeded driver, compiling original+harness and patched+harness, running both,
+  and comparing outputs — instead of silently skipping unless a hand-written
+  `perflens_driver.sh` happened to exist.
+- **Portable validation builds** (`validator/checker.py`): dropped
+  `-march=…/-mavx512…/-ffast-math` (could SIGILL on the build host and perturb
+  FP results); validation now uses `-O0 -fno-fast-math` + IEEE math.
+- **`OpenMPParallelRule`** (`optimizer/rules/c_rules.py`): now annotates only the
+  *outermost* loop of a nest and **skips loops containing reductions** (e.g.
+  `sum += …`) that would race without a `reduction` clause. Defers to GPU
+  offload on GPU targets to avoid stacking conflicting pragmas.
+- **`DivisionHoistRule`**: no longer matches C keywords (`double`), pointers, or
+  indexed/called expressions as divisors; only hoists genuinely loop-invariant
+  scalar divisors. Comments and string literals are stripped before analysis so
+  tokens like `O` in `/* I/O */` are never rewritten. Output now compiles.
+- **`OpenMPOffloadRule`**: emits valid `map(tofrom:array[0:n])` clauses for the
+  arrays actually accessed in the loop body, instead of the invalid
+  `map(tofrom:n[0:n])` on the scalar loop bound.
+- **`FortranOpenMPDoRule`**: correctly pairs each outermost `DO` with its
+  matching `END DO`, emitting balanced `!$OMP PARALLEL DO` / `!$OMP END PARALLEL
+  DO` (previously unbalanced and non-compiling on nested loops).
+- **`TileSearchTuner`** (`autotuner/tile_tuner.py`): supports `build_command`/
+  `run_command` for real multi-file projects; in single-file mode it now detects
+  a missing `main()` and reports a clear reason instead of silently failing every
+  trial. Uses portable build flags.
+- **Shared-header protection enforced in code** (`optimizer/project_optimizer.py`):
+  header files and headers shared by ≥3 files are now skipped by the optimizer,
+  rather than relying on a prompt comment the rules backend never saw.
+
+### Tests
+- `tests/unit/test_correctness_fixes.py` — 16 regression tests pinning every fix
+  above, including live `gcc`/`gfortran` compile checks and harness accept/reject.
+- Total: 286 passing (was 270).
+
+---
+
 
 ### Added
 - **`perflens project` command group** — whole-codebase optimization workflow

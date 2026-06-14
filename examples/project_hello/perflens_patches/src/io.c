@@ -22,11 +22,10 @@ void write_snapshot(const char *filename, const double *h,
     if (!fp) return;
 
     /* ANTI-PATTERN: unbuffered fwrite per element */
-        const double inv_O = 1.0 / O;
-    const double inv_fwrite = 1.0 / fwrite;
-#pragma omp parallel for schedule(static)
-for (int i = 0; i < n; i++) {
-        fwrite(&h[i], sizeof(double), 1, fp);   /* ANTI-PATTERN: I* inv_O in loop ** inv_fwrite(&u[i], sizeof(double), 1, fp);
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < n; i++) {
+        fwrite(&h[i], sizeof(double), 1, fp);   /* ANTI-PATTERN: I/O in loop */
+        fwrite(&u[i], sizeof(double), 1, fp);
     }
     fclose(fp);
 }
@@ -35,7 +34,7 @@ for (int i = 0; i < n; i++) {
 double l2_norm(const double *h, int n)
 {
     double norm = 0.0;
-    #pragma omp parallel for schedule(static)
+    #pragma omp simd
     for (int i = 0; i < n; i++) {
         norm += pow(h[i], 2);                   /* ANTI-PATTERN: pow(x,2) → x*x */
     }
@@ -51,13 +50,13 @@ void array_stats(const double *a, int n,
     *vmean = 0.0;
 
     /* ANTI-PATTERN: three separate passes — should be one loop */
-    #pragma omp parallel for schedule(static)
+    #pragma omp simd
     for (int i = 0; i < n; i++)
         if (a[i] < *vmin) *vmin = a[i];
-    #pragma omp parallel for schedule(static)
+    #pragma omp simd
     for (int i = 0; i < n; i++)
         if (a[i] > *vmax) *vmax = a[i];
-    #pragma omp parallel for schedule(static)
+    #pragma omp simd
     for (int i = 0; i < n; i++)
         *vmean += a[i];
     *vmean /= n;

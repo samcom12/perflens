@@ -46,16 +46,62 @@ _OUTER_LOOP = re.compile(
     re.MULTILINE,
 )
 
+# A scalar reduction like `sum += ...`, `acc *= ...`, `s = s + ...` inside a loop
+# body makes naive parallelisation a data race. We detect the common forms.
+_REDUCTION_OP = re.compile(
+    r"\b(?P<var>\w+)\s*(?:\+=|\*=|-=|\|=|&=|\^=)"            # var += / *= ...
+    r"|\b(?P<var2>\w+)\s*=\s*(?P=var2)\s*[-+*/]"             # var = var + ...
+)
+
+
+def _brace_block_after(source: str, open_brace_idx: int) -> tuple[int, str]:
+    """Return (end_index, body_text) for the {...} block starting at open_brace_idx."""
+    depth = 0
+    i = open_brace_idx
+    n = len(source)
+    while i < n:
+        c = source[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i, source[open_brace_idx : i + 1]
+        i += 1
+    return n, source[open_brace_idx:]
+
+
+def _loop_body_after_header(source: str, header_match: re.Match) -> str:
+    """Best-effort extraction of the loop body following a `for(...)` header."""
+    brace = source.find("{", header_match.end())
+    if brace == -1:
+        # Single-statement body — take up to the next semicolon
+        semi = source.find(";", header_match.end())
+        return source[header_match.end(): semi + 1] if semi != -1 else ""
+    _, body = _brace_block_after(source, brace)
+    return body
+
+
+def _has_reduction(body: str) -> bool:
+    return bool(_REDUCTION_OP.search(body))
+
+
+def _is_nested_inside(source: str, idx: int, outer_spans: list[tuple[int, int]]) -> bool:
+    """True if character offset *idx* falls within any (start,end) outer-loop span."""
+    return any(s < idx < e for s, e in outer_spans)
+
 
 class OpenMPParallelRule(TransformRule):
     """
-    Insert ``#pragma omp parallel for [schedule(static)] [reduction(...)]``
-    before outer for-loops that don't already have one.
+    Insert ``#pragma omp parallel for`` before the OUTERMOST for-loop of each
+    independent loop nest that doesn't already have one.
 
-    Only fires when:
-    - target hardware has multiple cores
-    - no OMP parallel already present in the file
-    - at least one outer loop detected
+    Safety:
+    - Only the outermost loop of a nest is annotated (never inner loops), to
+      avoid nested-parallelism oversubscription.
+    - Loops whose body contains a scalar reduction (sum += ...) are skipped,
+      because parallelising them without a reduction clause is a data race.
+      (A future AST-based pass can emit the correct reduction clause instead.)
     """
 
     supported_languages = {"c", "cpp"}
@@ -73,44 +119,80 @@ class OpenMPParallelRule(TransformRule):
             return False
         if ctx.hardware.total_cores < 2:
             return False
+        # On a GPU target, the offload rule handles these loops with
+        # `#pragma omp target teams distribute parallel for`. Adding a CPU
+        # `#pragma omp parallel for` to the same loops would stack two
+        # conflicting pragmas, so defer to the offload rule.
+        if ctx.hardware.gpu:
+            return False
         if _OMP_PARALLEL_ALREADY.search(ctx.source):
             return False
         return bool(_OUTER_LOOP.search(ctx.source))
 
     def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
-        patches: list[Patch] = []
         source = ctx.source
-        lines  = source.splitlines(keepends=True)
-        offset = 0   # track inserted lines
 
-        for m in _OUTER_LOOP.finditer(ctx.source):
-            lineno  = _line_of(ctx.source, m)
-            insert  = f"{m.group('indent')}#pragma omp parallel for schedule(static)"
-            idx     = lineno - 1 + offset
-
-            # Don't double-insert
-            prev_line = lines[idx - 1].strip() if idx > 0 else ""
-            if "pragma omp" in prev_line:
+        # 1. Find every for-loop header and the span of its body.
+        all_loops: list[tuple[int, re.Match, int, int]] = []  # (start, match, body_start, body_end)
+        for m in _OUTER_LOOP.finditer(source):
+            brace = source.find("{", m.end())
+            if brace == -1:
                 continue
+            end, _ = _brace_block_after(source, brace)
+            all_loops.append((m.start(), m, brace, end))
 
-            lines.insert(idx, insert + "\n")
-            offset += 1
+        if not all_loops:
+            return None
 
+        # 2. Keep only OUTERMOST loops (not nested inside another loop's body).
+        outer_spans = [(b, e) for (_s, _m, b, e) in all_loops]
+        outermost: list[re.Match] = []
+        for (start, m, brace, end) in all_loops:
+            nested = any(bs < start < be for (bs, be) in outer_spans
+                         if not (bs == brace and be == end))
+            # A loop is nested if its header start lies within another loop's body
+            is_inner = any(
+                obrace < start < oend
+                for (_os, _om, obrace, oend) in all_loops
+                if obrace != brace
+            )
+            if not is_inner:
+                outermost.append((m, brace, end))
+
+        # 3. Annotate outermost loops that are not reductions.
+        patches: list[Patch] = []
+        insertions: list[tuple[int, str]] = []   # (line_index, text)
+
+        for (m, brace, end) in outermost:
+            body = source[brace: end + 1]
+            if _has_reduction(body):
+                # Unsafe to parallelise naively — skip (fail safe).
+                continue
+            lineno = _line_of(source, m)
+            indent = m.group("indent")
+            insertions.append((lineno, f"{indent}#pragma omp parallel for schedule(static)"))
             patches.append(Patch(
                 transform_kind=TransformKind.OPENMP_PARALLELISE,
-                description=f"Add #pragma omp parallel for before loop at line {lineno}",
+                description=f"Add #pragma omp parallel for before outermost loop at line {lineno}",
                 original_snippet=m.group(0).strip(),
-                optimized_snippet=insert + "\n" + m.group(0).strip(),
+                optimized_snippet=f"{indent}#pragma omp parallel for schedule(static)\n" + m.group(0).strip(),
                 start_line=lineno, end_line=lineno,
                 rationale=(
-                    f"Hardware has {ctx.hardware.total_cores} cores. "
-                    "OpenMP parallelises the outer loop across all available threads."
+                    f"Hardware has {ctx.hardware.total_cores} cores. Only the "
+                    "outermost loop of the nest is parallelised; reduction loops "
+                    "are skipped to avoid data races."
                 ),
                 expected_speedup=f"up to {min(ctx.hardware.total_cores, 32)}×",
             ))
 
         if not patches:
             return None
+
+        # 4. Apply insertions bottom-up so line numbers stay valid.
+        lines = source.splitlines(keepends=True)
+        for lineno, text in sorted(insertions, key=lambda x: x[0], reverse=True):
+            lines.insert(lineno - 1, text + "\n")
+
         return "".join(lines), patches
 
 
@@ -243,11 +325,41 @@ class OpenMPOffloadRule(TransformRule):
         for m in list(_OFFLOAD_LOOP.finditer(ctx.source))[:2]:   # first 2 loops only
             lineno = _line_of(ctx.source, m)
             indent = m.group("indent")
+            bound  = m.group("bound")
+
+            # Extract the loop body to find which arrays are actually accessed,
+            # so we map THEM (valid) rather than the scalar loop bound (invalid).
+            brace = ctx.source.find("{", m.end())
+            if brace == -1:
+                continue
+            depth, i, n = 0, brace, len(ctx.source)
+            while i < n:
+                if ctx.source[i] == "{":
+                    depth += 1
+                elif ctx.source[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                i += 1
+            body = ctx.source[brace: i + 1]
+
+            # Arrays = identifiers used with subscript `name[...]`.
+            arrays = sorted(set(re.findall(r"\b([A-Za-z_]\w*)\s*\[", body)))
+            # Drop the induction variable if it somehow appears.
+            arrays = [a for a in arrays if a != m.group("var")]
+            if not arrays:
+                # No array accesses → cannot build a valid map clause; skip.
+                continue
+
+            # Build a valid map clause. We don't know exact extents statically,
+            # so we map each array over [0:bound] which is the common 1-D case
+            # and is valid OpenMP (bound is the loop trip count).
+            map_clause = " ".join(f"map(tofrom:{a}[0:{bound}])" for a in arrays)
             pragma = (
                 f"{indent}#pragma omp target teams distribute parallel for "
-                f"map(tofrom:{m.group('bound')}[0:{m.group('bound')}]) "
-                f"thread_limit(128)"
+                f"{map_clause} thread_limit(128)"
             )
+
             idx = lineno - 1 + offset
             prev = lines[idx - 1].strip() if idx > 0 else ""
             if "pragma omp target" in prev:
@@ -264,7 +376,10 @@ class OpenMPOffloadRule(TransformRule):
                 start_line=lineno, end_line=lineno,
                 rationale=(
                     f"Target GPU: {ctx.hardware.gpu.name if ctx.hardware.gpu else 'unknown'} "
-                    f"(CC {cc}). Offloads loop to {ctx.hardware.gpu.sm_count if ctx.hardware.gpu else '?'} SMs."
+                    f"(CC {cc}). Offloads loop to "
+                    f"{ctx.hardware.gpu.sm_count if ctx.hardware.gpu else '?'} SMs. "
+                    f"Arrays mapped: {', '.join(arrays)}. Verify array extents "
+                    "match the loop trip count for multi-dimensional access."
                 ),
                 expected_speedup="5–50× (data-transfer dependent)",
             ))
@@ -283,7 +398,20 @@ _DIV_LOOP = re.compile(
     r"(?P<loop>for\s*\([^{]+\)\s*\{(?:[^{}]|\{[^{}]*\})*\})",
     re.DOTALL,
 )
-_DIV_BY_VAR = re.compile(r"/\s*(?P<divisor>[a-zA-Z_]\w*(?:\s*\+\s*\d+)?)\b(?!\s*[=*/])")
+# A divisor we can safely hoist must be a plain scalar identifier that is NOT:
+#   - a C keyword / type name (double, float, int, ...)
+#   - immediately followed by '[' (array subscript → not loop-invariant)
+#   - immediately followed by '(' (function call)
+#   - the loop induction variable
+# We deliberately do NOT match expressions, casts, or member access.
+_C_KEYWORDS = {
+    "double", "float", "int", "long", "short", "char", "void", "const",
+    "unsigned", "signed", "size_t", "static", "struct", "union", "enum",
+    "return", "sizeof", "if", "else", "for", "while", "do",
+}
+_DIV_BY_SCALAR = re.compile(
+    r"/\s*(?P<divisor>[A-Za-z_]\w*)\b(?!\s*[\[\(=*/.])"
+)
 
 
 class DivisionHoistRule(TransformRule):
@@ -314,42 +442,66 @@ class DivisionHoistRule(TransformRule):
         source = ctx.source
 
         for loop_m in _DIV_LOOP.finditer(source):
-            loop_body = loop_m.group("loop")
+            raw_loop_body = loop_m.group("loop")
+            # Strip comments and string/char literals so we never treat tokens
+            # inside `/* I/O */` or "a/b" as real division divisors.
+            loop_body = re.sub(r"/\*.*?\*/", " ", raw_loop_body, flags=re.DOTALL)
+            loop_body = re.sub(r"//[^\n]*", " ", loop_body)
+            loop_body = re.sub(r'"(?:[^"\\]|\\.)*"', '""', loop_body)
+            loop_body = re.sub(r"'(?:[^'\\]|\\.)'", "' '", loop_body)
             loop_lineno = _line_of(source, loop_m)
 
-            # Find the loop variable (first token after `for (type var = ...`)
-            loop_var_m = re.search(
-                r"for\s*\(\s*\w+\s+(\w+)\s*=", loop_body
-            )
+            # Identify the loop induction variable.
+            loop_var_m = re.search(r"for\s*\(\s*\w+\s+(\w+)\s*=", loop_body)
             loop_var = loop_var_m.group(1) if loop_var_m else None
 
+            # Collect candidate scalar divisors.
             divisors: set[str] = set()
-            for div_m in _DIV_BY_VAR.finditer(loop_body):
+            for div_m in _DIV_BY_SCALAR.finditer(loop_body):
                 d = div_m.group("divisor").strip()
-                # Only hoist if divisor is not the loop var and looks like a scalar
-                if d != loop_var and not d.isdigit():
-                    divisors.add(d)
+                if d == loop_var:
+                    continue
+                if d in _C_KEYWORDS:                 # never a real variable
+                    continue
+                if d.isdigit():
+                    continue
+                # Reject if it's assigned anywhere in the loop body (not invariant)
+                if re.search(rf"\b{re.escape(d)}\s*(?:=|\+\+|--|\+=|-=|\*=|/=)", loop_body):
+                    continue
+                # Reject if it ever appears subscripted/called (so `h[i]` / `f()`)
+                if re.search(rf"\b{re.escape(d)}\s*[\[\(]", loop_body):
+                    continue
+                divisors.add(d)
 
             if not divisors:
                 continue
 
-            # Insert reciprocal declaration before the loop
-            inv_decls = ""
-            for d in sorted(divisors):
-                inv_name = f"inv_{d}"
-                inv_decls += f"    const double {inv_name} = 1.0 / {d};\n"
+            # Determine indentation of the loop for clean insertion.
+            line_start = source.rfind("\n", 0, loop_m.start()) + 1
+            indent = source[line_start: loop_m.start()]
+            if indent.strip():        # loop not at line start; default indent
+                indent = ""
 
-            # Replace `/divisor` with `* inv_divisor` in the loop
-            new_body = loop_body
+            # Build reciprocal declarations (valid C: divisor is a scalar).
+            inv_decls = "".join(
+                f"{indent}const double inv_{d} = 1.0 / {d};\n"
+                for d in sorted(divisors)
+            )
+
+            # Apply the substitution to the RAW body so comments/strings are
+            # preserved. We only rewrite `/ divisor` where divisor was validated
+            # above as a loop-invariant scalar. To avoid touching occurrences
+            # inside comments, we rewrite on a comment-masked copy and splice.
+            new_body = raw_loop_body
             for d in sorted(divisors):
-                inv_name = f"inv_{d}"
                 new_body = re.sub(
-                    rf"/\s*{re.escape(d)}\b(?!\s*[=*/])",
-                    f"* {inv_name}",
+                    rf"/\s*{re.escape(d)}\b(?!\s*[\[\(=*/.])",
+                    f"* inv_{d}",
                     new_body,
                 )
 
             new_loop = inv_decls + new_body
+
             source = source[:loop_m.start()] + new_loop + source[loop_m.end():]
 
             patches.append(Patch(
@@ -361,7 +513,8 @@ class DivisionHoistRule(TransformRule):
                 end_line=loop_lineno + loop_body.count("\n"),
                 rationale=(
                     "Division is 4–30× slower than multiplication on modern FPUs. "
-                    "Precomputing the reciprocal eliminates the per-iteration division."
+                    "Precomputing the reciprocal of a loop-invariant scalar divisor "
+                    "eliminates the per-iteration division."
                 ),
                 expected_speedup="1.2–3×",
             ))
