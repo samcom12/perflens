@@ -15,7 +15,7 @@ pip install -e .
 
 Verify:
 ```bash
-perflens --version    # perflens 0.3.0
+perflens --version    # perflens 0.1.0
 perflens hw detect    # shows your detected hardware
 perflens backends     # shows available optimization backends
 ```
@@ -114,11 +114,15 @@ perflens optimize examples/c/stencil.c \
 ## 6. Empirically tune tile sizes
 
 ```bash
-# First apply loop tiling (inserts #define TILE N)
-perflens optimize examples/c/stencil.c --backend rules
+# Loop tiling fires on nested loops like matrix-multiply, inserting
+# `#define TILE N`. Write the tiled version to a known path with --output:
+perflens optimize examples/cpp/matmul.cpp --backend rules \
+    --output /tmp/matmul_tiled.cpp
 
-# Then sweep tile sizes on real hardware
-perflens autotune examples/c/stencil_optimized_iter0.c \
+# The auto-tuner needs a runnable program. For a kernel-only file, point it at
+# the project's build/run via --driver, or tune a file that contains main().
+# Then sweep tile sizes on real hardware:
+perflens autotune /tmp/matmul_tiled.cpp \
     --param tile \
     --tiles 8,16,32,64,128 \
     --output tile_result.json

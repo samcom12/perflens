@@ -352,3 +352,92 @@ class TestBug6_Autotuner:
         pt = tuner._trial(src.read_text(), tile_size=16)
         assert pt.compile_ok is True
         assert pt.run_ok is True
+
+
+# ── Bugs found during docs verification ───────────────────────────────────────
+
+class TestDocsBugs:
+    def _gcc(self):
+        return shutil.which("gcc") is not None
+
+    def test_loop_tiling_brace_balanced_and_compiles(self, cpu_hw, tmp_path):
+        """LoopTilingRule must not emit inline #define or unbalanced braces."""
+        from perflens.optimizer.rules.c_rules import LoopTilingRule
+        src = textwrap.dedent("""\
+            void add3d(double *A, double *B, double *C, int N) {
+                for (int i = 0; i < N; i++) {
+                    for (int j = 0; j < N; j++) {
+                        for (int k = 0; k < N; k++) {
+                            C[i*N*N+j*N+k] = A[i*N*N+j*N+k] + B[i*N*N+j*N+k];
+                        }
+                    }
+                }
+            }
+        """)
+        res = LoopTilingRule().apply(_ctx(src, "c", cpu_hw))
+        assert res is not None
+        out = res[0]
+        # #define must be on its own line, never inline after '{'
+        assert "{#define" not in out
+        assert out.count("{") == out.count("}")
+        # TILE macro present at top
+        assert "#define TILE" in out
+        if self._gcc():
+            import subprocess
+            p = tmp_path / "t.c"; p.write_text(out)
+            r = subprocess.run(["gcc", "-O0", "-fno-fast-math", "-c",
+                                str(p), "-o", str(tmp_path / "t.o")],
+                               capture_output=True, text=True)
+            assert r.returncode == 0, f"tiled code must compile: {r.stderr}"
+
+    def test_tiling_skips_imperfect_nest(self, cpu_hw):
+        """Matmul-style nests (accumulator between loops) must not be tiled."""
+        from perflens.optimizer.rules.c_rules import LoopTilingRule
+        src = textwrap.dedent("""\
+            void mm(double *A, double *B, double *C, int n) {
+                for (int i = 0; i < n; i++) {
+                    for (int j = 0; j < n; j++) {
+                        double sum = 0.0;
+                        for (int k = 0; k < n; k++) {
+                            sum += A[i*n+k] * B[k*n+j];
+                        }
+                        C[i*n+j] = sum;
+                    }
+                }
+            }
+        """)
+        res = LoopTilingRule().apply(_ctx(src, "c", cpu_hw))
+        # Imperfect nest → no tiling (would break accumulator scoping)
+        assert res is None
+
+    def test_offload_no_cross_function_contamination(self, gpu_hw):
+        """Braceless loops must not pull arrays from the next function."""
+        from perflens.optimizer.rules.c_rules import OpenMPOffloadRule
+        src = textwrap.dedent("""\
+            static void free2d(double **a, int rows) {
+                for (int i = 0; i < rows; i++) free(a[i]);
+            }
+            void k(double *u, double *un, int n) {
+                for (int i = 0; i < n; i++) { un[i] = u[i]*2.0; }
+            }
+        """)
+        res = OpenMPOffloadRule().apply(_ctx(src, "c", gpu_hw))
+        assert res is not None
+        out = res[0]
+        # free2d's loop region must not get a target pragma mapping u/un
+        free_region = out.split("void k")[0]
+        assert "#pragma omp target" not in free_region
+
+    def test_offload_skips_alloc_free_loops(self, gpu_hw):
+        from perflens.optimizer.rules.c_rules import OpenMPOffloadRule
+        src = textwrap.dedent("""\
+            void setup(double **a, int rows) {
+                for (int i = 0; i < rows; i++) {
+                    a[i] = malloc(8 * rows);
+                }
+            }
+        """)
+        res = OpenMPOffloadRule().apply(_ctx(src, "c", gpu_hw))
+        # malloc loop must never be offloaded
+        if res is not None:
+            assert "#pragma omp target" not in res[0]

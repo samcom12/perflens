@@ -114,8 +114,9 @@ perflens optimize examples/c/stencil.c --backend anthropic --hw a100
 # See which backends are ready on your machine
 perflens backends
 
-# Auto-tune tile sizes empirically (no key)
-perflens autotune examples/c/stencil_optimized_iter0.c --param tile
+# Auto-tune tile sizes empirically (no key) — tiling fires on nested loops:
+perflens optimize examples/cpp/matmul.cpp --backend rules --output /tmp/matmul_tiled.cpp
+perflens autotune /tmp/matmul_tiled.cpp --param tile
 
 # Collect compiler missed-vectorization feedback (no key)
 perflens compiler examples/c/stencil.c --compiler gcc
