@@ -121,54 +121,66 @@ class FortranOpenMPDoRule(TransformRule):
         return bool(_DO_LOOP.search(ctx.source))
 
     def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
-        lines   = ctx.source.splitlines(keepends=True)
+        src_lines = ctx.source.splitlines()
+
+        # 1. Compute, for every DO line, its matching END DO line and nesting depth.
+        do_stack: list[int] = []
+        match_end: dict[int, int] = {}     # do_line_idx -> enddo_line_idx
+        depth_of:  dict[int, int] = {}     # do_line_idx -> nesting depth (0=outermost)
+
+        for i, line in enumerate(src_lines):
+            if re.match(r"^\s*DO\s+\w+\s*=", line, re.IGNORECASE):
+                depth_of[i] = len(do_stack)
+                do_stack.append(i)
+            elif re.match(r"^\s*(?:ENDDO|END\s+DO)\b", line, re.IGNORECASE):
+                if do_stack:
+                    open_i = do_stack.pop()
+                    match_end[open_i] = i
+
+        # 2. Keep only OUTERMOST loops (depth 0) that have a matched END DO.
+        outermost = [i for i in sorted(match_end) if depth_of.get(i) == 0]
+        if not outermost:
+            return None
+
+        # 3. Build insertion list (pragma before DO, END PARALLEL DO after ENDDO).
+        #    Limit to first 3 independent nests to keep diffs readable.
+        inserts: dict[int, list[str]] = {}    # line_idx -> lines to insert BEFORE it
+        after:   dict[int, list[str]] = {}    # line_idx -> lines to insert AFTER it
         patches = []
-        offset  = 0
 
-        matches = list(_DO_LOOP.finditer(ctx.source))[:3]   # first 3 loops only
-
-        for m in matches:
-            lineno = ctx.source[: m.start()].count("\n") + 1
-            indent = m.group("indent")
-            idx    = lineno - 1 + offset
-
-            # Don't duplicate
-            prev = lines[idx - 1].strip() if idx > 0 else ""
-            if "!$OMP" in prev.upper():
-                continue
-
-            pragma = f"{indent}!$OMP PARALLEL DO SCHEDULE(STATIC)\n"
-            lines.insert(idx, pragma)
-            offset += 1
-
-            # Find matching ENDDO/END DO and insert END PARALLEL DO
-            depth = 1
-            for j in range(idx + 1, len(lines)):
-                if re.match(r"^\s*DO\b", lines[j], re.IGNORECASE):
-                    depth += 1
-                if re.match(r"^\s*(?:ENDDO|END\s+DO)\b", lines[j], re.IGNORECASE):
-                    depth -= 1
-                    if depth == 0:
-                        lines.insert(j + 1, f"{indent}!$OMP END PARALLEL DO\n")
-                        offset += 1
-                        break
-
+        for do_i in outermost[:3]:
+            indent = re.match(r"^(\s*)", src_lines[do_i]).group(1)
+            end_i  = match_end[do_i]
+            inserts.setdefault(do_i, []).append(f"{indent}!$OMP PARALLEL DO SCHEDULE(STATIC)")
+            after.setdefault(end_i, []).append(f"{indent}!$OMP END PARALLEL DO")
+            lineno = do_i + 1
             patches.append(Patch(
                 transform_kind=TransformKind.OPENMP_PARALLELISE,
                 description=f"Add !$OMP PARALLEL DO at line {lineno}",
-                original_snippet=m.group(0),
-                optimized_snippet=pragma + m.group(0),
-                start_line=lineno, end_line=lineno,
+                original_snippet=src_lines[do_i].strip(),
+                optimized_snippet=f"!$OMP PARALLEL DO SCHEDULE(STATIC)\n{src_lines[do_i].strip()}",
+                start_line=lineno, end_line=match_end[do_i] + 1,
                 rationale=(
-                    f"Target: {ctx.hardware.total_cores} cores. "
-                    "OpenMP parallelises the DO loop across all available threads."
+                    f"Target: {ctx.hardware.total_cores} cores. Only the outermost "
+                    "DO loop of the nest is parallelised, with a correctly paired "
+                    "!$OMP END PARALLEL DO."
                 ),
                 expected_speedup=f"up to {min(ctx.hardware.total_cores, 32)}×",
             ))
 
-        if not patches:
-            return None
-        return "".join(lines), patches
+        # 4. Rebuild the source with insertions, preserving order.
+        out: list[str] = []
+        for i, line in enumerate(src_lines):
+            for pre in inserts.get(i, []):
+                out.append(pre)
+            out.append(line)
+            for post in after.get(i, []):
+                out.append(post)
+
+        result = "\n".join(out)
+        if ctx.source.endswith("\n"):
+            result += "\n"
+        return result, patches
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

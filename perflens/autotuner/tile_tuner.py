@@ -96,14 +96,23 @@ class TileSearchTuner:
         warmup_runs: int       = 1,
         timed_runs: int        = 3,
         console: Optional[Console] = None,
+        build_command: Optional[list[str]] = None,
+        run_command: Optional[list[str]] = None,
     ):
-        self.source      = source
-        self.hardware    = hardware
-        self.driver      = driver
-        self.timeout_s   = timeout_s
-        self.warmup_runs = warmup_runs
-        self.timed_runs  = timed_runs
-        self.console     = console or Console()
+        self.source        = source
+        self.hardware      = hardware
+        self.driver        = driver
+        self.timeout_s     = timeout_s
+        self.warmup_runs   = warmup_runs
+        self.timed_runs    = timed_runs
+        self.console       = console or Console()
+        # For real (multi-file) HPC projects, the caller supplies the project's
+        # own build + run commands. {src} in build_command is replaced with the
+        # tile-substituted source path. Without these, single-file mode is used
+        # ONLY if the file defines main(); otherwise the trial is skipped with a
+        # clear message (a lone kernel file cannot be linked into an executable).
+        self.build_command = build_command
+        self.run_command   = run_command
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -218,36 +227,64 @@ class TileSearchTuner:
                 text = re.sub(r"#define\s+TILE\s+\d+", f"#define TILE {tile_size}", text)
             tmp_src.write_text(text)
 
-            # Compile
-            flags  = list(self.hardware.recommended_cflags) + ["-lm"]
-            ext    = self.source.suffix.lower()
-            compiler = self._pick_compiler(ext)
-            if compiler is None:
-                return pt
-
-            cmd = [compiler] + flags + [str(tmp_src), "-o", str(tmp_bin)]
-            try:
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                pt.compiler_output = proc.stderr[:300]
-                if proc.returncode != 0:
-                    return pt
-                pt.compile_ok = True
-            except (subprocess.TimeoutExpired, FileNotFoundError):
-                return pt
-
-            # Determine run command
-            if self.driver and self.driver.exists():
-                run_cmd = [str(self.driver), str(tmp_bin)]
-            else:
-                run_cmd = [str(tmp_bin)]
-
-            # Build environment
             import os
             env = dict(os.environ)
             if num_threads is not None:
                 env["OMP_NUM_THREADS"] = str(num_threads)
 
-            # Warm-up
+            # ── Path A: caller supplied the project's real build/run commands ──
+            if self.build_command and self.run_command:
+                build = [a.replace("{src}", str(tmp_src)).replace("{bin}", str(tmp_bin))
+                         for a in self.build_command]
+                try:
+                    proc = subprocess.run(build, capture_output=True, text=True,
+                                          timeout=self.timeout_s, env=env)
+                    pt.compiler_output = proc.stderr[:300]
+                    if proc.returncode != 0:
+                        return pt
+                    pt.compile_ok = True
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    return pt
+                run_cmd = [a.replace("{bin}", str(tmp_bin)) for a in self.run_command]
+
+            # ── Path B: single-file mode — only valid if the file has main() ──
+            else:
+                ext      = self.source.suffix.lower()
+                compiler = self._pick_compiler(ext)
+                if compiler is None:
+                    pt.compiler_output = "no compiler found"
+                    return pt
+
+                has_main = bool(re.search(r"\bint\s+main\s*\(", text)) or \
+                           bool(re.search(r"\bPROGRAM\s+\w+", text, re.IGNORECASE))
+                if not has_main and not (self.driver and self.driver.exists()):
+                    # A lone kernel file cannot be linked into an executable.
+                    # Signal clearly instead of silently failing every trial.
+                    pt.compiler_output = (
+                        "source has no main() — supply build_command/run_command "
+                        "for multi-file projects, or a driver"
+                    )
+                    return pt
+
+                # Use SAFE, portable flags (no -march/-mavx512/-ffast-math): the
+                # tuner runs on the BUILD host, which may not be the target arch.
+                safe_flags = ["-O3", "-fopenmp", "-funroll-loops"]
+                cmd = [compiler] + safe_flags + [str(tmp_src), "-o", str(tmp_bin), "-lm"]
+                try:
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                    pt.compiler_output = proc.stderr[:300]
+                    if proc.returncode != 0:
+                        return pt
+                    pt.compile_ok = True
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    return pt
+
+                if self.driver and self.driver.exists():
+                    run_cmd = [str(self.driver), str(tmp_bin)]
+                else:
+                    run_cmd = [str(tmp_bin)]
+
+            # ── Warm-up ────────────────────────────────────────────────────────
             for _ in range(self.warmup_runs):
                 try:
                     subprocess.run(run_cmd, capture_output=True,
@@ -255,7 +292,7 @@ class TileSearchTuner:
                 except (subprocess.TimeoutExpired, FileNotFoundError):
                     return pt
 
-            # Timed runs
+            # ── Timed runs ─────────────────────────────────────────────────────
             times: list[float] = []
             for _ in range(self.timed_runs):
                 t0 = time.perf_counter()

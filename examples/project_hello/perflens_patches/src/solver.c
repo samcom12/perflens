@@ -72,28 +72,30 @@ int main(int argc, char **argv)
 
     double dt = 0.001;
 
-        const double inv_for = 1.0 / for;
-    const double inv_if = 1.0 / if;
-    const double inv_roe_flux = 1.0 / roe_flux;
-    const double inv_u_new = 1.0 / u_new;
-for (int step = 0; step < NSTEPS; step++) {
+    #pragma omp simd
+
+    for (int step = 0; step < NSTEPS; step++) {
 
         halo_exchange(h, n, rank, nprocs);
         halo_exchange(u, n, rank, nprocs);
 
         double smax = max_wave_speed(h, u, n-1, G);
 
-        /* Compute fluxes ** inv_roe_flux(h, h+1, u, u+1, fh, fu, n-1, G);
+        /* Compute fluxes */
+        roe_flux(h, h+1, u, u+1, fh, fu, n-1, G);
         compute_bed_slope(z, h, sb, n, DX);
 
-        /* ANTI-PATTERN: missing #pragma omp parallel for ** inv_for (int i = 1; i < n-1; i++) {
-            h_new[i] = h[i] - dt / DX * (fh[i] - fh[i-1]);    /* ANTI-PATTERN: division ** inv_u_new[i] = u[i] - dt / DX * (fu[i] - fu[i-1]) / (h[i] + 1e-10) + dt * sb[i];
+        /* ANTI-PATTERN: missing #pragma omp parallel for */
+        for (int i = 1; i < n-1; i++) {
+            h_new[i] = h[i] - dt / DX * (fh[i] - fh[i-1]);    /* ANTI-PATTERN: division */
+            u_new[i] = u[i] - dt / DX * (fu[i] - fu[i-1]) / (h[i] + 1e-10) + dt * sb[i];
         }
 
         memcpy(h, h_new, n * sizeof(double));
         memcpy(u, u_new, n * sizeof(double));
 
-        /* ANTI-PATTERN: printf inside time loop ** inv_if (step % 50 == 0 && rank == 0) {
+        /* ANTI-PATTERN: printf inside time loop */
+        if (step % 50 == 0 && rank == 0) {
             printf("step=%4d  smax=%.4f  h_centre=%.4f\n",
                    step, smax, h[n/2]);
         }

@@ -234,8 +234,34 @@ class ProjectOptimizer:
         phase_success = True
         files_to_process = phase.files[:self.max_files_per_phase]
 
+        # Build a dependency view so we can enforce shared-header protection
+        # in CODE (previously this was only a prompt comment that the rules
+        # backend never even saw).
+        from perflens.project.dependency_graph import DependencyGraph
+        try:
+            dep_graph = DependencyGraph(self.plan.graph)
+        except Exception:
+            dep_graph = None
+
         for sf in files_to_process:
             progress.update(task, description=f"[cyan]{sf.path.name}…")
+
+            # ENFORCE: never rewrite header files. Modifying a header changes
+            # every translation unit that includes it, which we cannot validate
+            # safely here. This is a hard rule, not a prompt suggestion.
+            if sf.is_header:
+                self.console.print(
+                    f"[dim]  – {sf.path.name}: skipped (header file — protected)[/dim]"
+                )
+                progress.advance(task)
+                continue
+            if dep_graph is not None and dep_graph.is_shared_header(sf.path):
+                self.console.print(
+                    f"[yellow]  – {sf.path.name}: skipped (shared by "
+                    f"{len(dep_graph._in.get(sf.path, set()))} files — protected)[/yellow]"
+                )
+                progress.advance(task)
+                continue
 
             # Use pre-computed scanner findings if available
             findings = sf.scanner_findings

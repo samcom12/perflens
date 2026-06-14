@@ -29,9 +29,15 @@ _C_COMPILERS   = ["gcc", "clang", "icx", "nvc"]
 _CXX_COMPILERS = ["g++", "clang++", "icpx", "nvc++"]
 _F_COMPILERS   = ["gfortran", "ifort", "ifx", "nvfortran"]
 
-_CFLAGS_BASE   = ["-O2", "-Wall", "-Wextra", "-fopenmp", "-lm"]
-_CXXFLAGS_BASE = ["-O2", "-Wall", "-Wextra", "-fopenmp", "-std=c++17", "-lm"]
-_FFLAGS_BASE   = ["-O2", "-Wall", "-fopenmp"]
+# Validation builds run on the BUILD HOST, which may differ from the target
+# architecture the user is tuning for. We therefore must NOT use target-specific
+# flags like -march=sapphirerapids / -mavx512f (binary may SIGILL on the build
+# host), and must NOT use -ffast-math (it perturbs FP results and would make a
+# numerical-equivalence check meaningless). Portable -O0 + IEEE math only.
+_CFLAGS_BASE   = ["-O0", "-Wall", "-Wextra", "-fopenmp", "-fno-fast-math"]
+_CXXFLAGS_BASE = ["-O0", "-Wall", "-Wextra", "-fopenmp", "-std=c++17", "-fno-fast-math"]
+_FFLAGS_BASE   = ["-O0", "-Wall", "-fopenmp"]
+_LINK_LIBS     = ["-lm"]
 
 
 def _find_compiler(candidates: list[str]) -> Optional[str]:
@@ -80,8 +86,11 @@ class PatchValidator:
             return report
 
         # 3. Run tests
+        tests_passed = False
         if test_dir and test_dir.exists():
-            report.checks.append(self._run_tests(test_dir, language, patched))
+            test_result = self._run_tests(test_dir, language, patched)
+            report.checks.append(test_result)
+            tests_passed = test_result.status == CheckStatus.PASS
         else:
             report.checks.append(CheckResult(
                 name="Test suite",
@@ -89,20 +98,63 @@ class PatchValidator:
                 message="No test directory provided",
             ))
 
-        # 4. Numerical diff (Python and compiled languages)
+        # 4. Numerical diff (Python and compiled languages).
+        # This is the PRIMARY correctness signal. If the patch changes program
+        # semantics and this check cannot run, we must fail closed — hence
+        # critical=True so a SKIP does not silently count as success.
         if language == "python":
             diff_result, max_diff = self._python_numerical_diff(original, patched)
         else:
             diff_result, max_diff = self._compiled_numerical_diff(
                 original, patched, language
             )
+        diff_result.critical = True
         report.checks.append(diff_result)
         report.numerical_diff_max = max_diff
+
+        # Determine whether this patch could change numerical behaviour.
+        report.semantics_may_change = self._semantics_may_change(original, patched)
+
+        # Correctness is considered verified if the test suite passed OR the
+        # numerical diff was within tolerance.
+        report.correctness_verified = tests_passed or (
+            diff_result.status == CheckStatus.PASS
+        )
 
         # 5. Diff size / regression check
         report.checks.append(self._diff_sanity_check(original, patched))
 
         return report
+
+    # ── Semantics-change heuristic ────────────────────────────────────────────
+
+    @staticmethod
+    def _semantics_may_change(original: Path, patched: Path) -> bool:
+        """
+        Decide whether a patch could alter numerical results / behaviour.
+
+        Pure pragma insertions that the compiler may ignore (e.g. #pragma omp
+        simd) are still treated as semantics-changing, because parallelisation
+        can introduce races or reassociate FP operations. Only whitespace /
+        comment-only diffs are considered behaviour-preserving.
+        """
+        import re as _re
+        o = original.read_text(errors="replace")
+        p = patched.read_text(errors="replace")
+        if o == p:
+            return False
+
+        def _strip(text: str) -> str:
+            # Remove C/C++/Fortran/Python comments and all whitespace so that
+            # a comment-only or reformatting change is detected as no-op.
+            text = _re.sub(r"/\*.*?\*/", "", text, flags=_re.DOTALL)
+            text = _re.sub(r"//[^\n]*", "", text)
+            text = _re.sub(r"!.*?$", "", text, flags=_re.MULTILINE)   # Fortran
+            text = _re.sub(r"#(?!\s*pragma|\s*include|\s*define).*?$", "",
+                           text, flags=_re.MULTILINE)                  # py/# comments
+            return _re.sub(r"\s+", "", text)
+
+        return _strip(o) != _strip(p)
 
     # ── Compile check ─────────────────────────────────────────────────────────
 
@@ -275,17 +327,40 @@ class PatchValidator:
         self, original: Path, patched: Path, language: str
     ) -> tuple[CheckResult, Optional[float]]:
         """
-        For compiled languages: look for a companion *_ref binary or driver script
-        and compare stdout outputs numerically.
-        Falls back to SKIP if no driver is found.
+        Establish numerical equivalence for compiled languages.
+
+        Strategy (in priority order):
+          1. If the user supplied a perflens_driver.sh next to the source, use it.
+          2. Otherwise AUTO-GENERATE a harness: discover exported functions whose
+             signatures we can synthesise inputs for, compile original+harness and
+             patched+harness into two binaries, run both with identical seeded
+             inputs, and compare their printed outputs.
+          3. If no callable kernel can be harnessed, return SKIP (the caller marks
+             this check critical, so an un-harnessable semantic change fails closed).
         """
         name = "Numerical diff"
 
+        # 1. User-provided driver takes precedence.
         driver = original.parent / "perflens_driver.sh"
-        if not driver.exists():
-            return CheckResult(name=name, status=CheckStatus.SKIP,
-                               message="No perflens_driver.sh found for numerical comparison"), None
+        if driver.exists():
+            return self._diff_via_driver(driver, original, patched, name)
 
+        # 2. Auto-generated harness.
+        if language in ("c", "cpp"):
+            return self._diff_via_autoharness(original, patched, language, name)
+
+        # 3. Fortran auto-harness is not yet implemented → cannot verify.
+        return CheckResult(
+            name=name, status=CheckStatus.SKIP,
+            message="No driver and auto-harness unavailable for this language — "
+                    "correctness could not be established",
+        ), None
+
+    # ── Driver-based diff (user supplied) ─────────────────────────────────────
+
+    def _diff_via_driver(
+        self, driver: Path, original: Path, patched: Path, name: str
+    ) -> tuple[CheckResult, Optional[float]]:
         def run_driver(src: Path) -> Optional[str]:
             try:
                 proc = subprocess.run(
@@ -296,19 +371,73 @@ class PatchValidator:
             except Exception:
                 return None
 
-        out_orig   = run_driver(original)
+        out_orig    = run_driver(original)
         out_patched = run_driver(patched)
-
         if out_orig is None or out_patched is None:
             return CheckResult(name=name, status=CheckStatus.SKIP,
                                message="Driver failed to run"), None
+        return self._compare_float_text(out_orig, out_patched, name)
 
-        # Parse floats from stdout
+    # ── Auto-generated harness diff ───────────────────────────────────────────
+
+    def _diff_via_autoharness(
+        self, original: Path, patched: Path, language: str, name: str
+    ) -> tuple[CheckResult, Optional[float]]:
+        from perflens.validator.harness import (
+            discover_kernels, build_harness, HarnessError,
+        )
+
+        try:
+            kernels = discover_kernels(original, language)
+        except Exception as exc:
+            return CheckResult(name=name, status=CheckStatus.SKIP,
+                               message=f"Kernel discovery failed: {exc}"), None
+
+        if not kernels:
+            return CheckResult(
+                name=name, status=CheckStatus.SKIP,
+                message="No harness-able kernel found — correctness not established"), None
+
+        compiler = (_find_compiler(_C_COMPILERS) if language == "c"
+                    else _find_compiler(_CXX_COMPILERS))
+        if compiler is None:
+            return CheckResult(name=name, status=CheckStatus.SKIP,
+                               message="No compiler available for harness"), None
+
+        flags = _CFLAGS_BASE if language == "c" else _CXXFLAGS_BASE
+
+        try:
+            out_orig = build_harness(
+                source=original, kernels=kernels, language=language,
+                compiler=compiler, flags=flags, link_libs=_LINK_LIBS,
+                timeout=self.timeout,
+            )
+            out_patched = build_harness(
+                source=patched, kernels=kernels, language=language,
+                compiler=compiler, flags=flags, link_libs=_LINK_LIBS,
+                timeout=self.timeout,
+            )
+        except HarnessError as exc:
+            return CheckResult(name=name, status=CheckStatus.SKIP,
+                               message=f"Harness build/run failed: {exc}"), None
+
+        if out_orig is None or out_patched is None:
+            return CheckResult(name=name, status=CheckStatus.SKIP,
+                               message="Harness produced no output"), None
+
+        return self._compare_float_text(out_orig, out_patched, name)
+
+    # ── Float comparison helper ───────────────────────────────────────────────
+
+    def _compare_float_text(
+        self, out_orig: str, out_patched: str, name: str
+    ) -> tuple[CheckResult, Optional[float]]:
         import re
         import numpy as np
 
         def parse_floats(text: str) -> list[float]:
-            return [float(x) for x in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)]
+            return [float(x) for x in
+                    re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", text)]
 
         floats_o = parse_floats(out_orig)
         floats_p = parse_floats(out_patched)
@@ -323,10 +452,11 @@ class PatchValidator:
 
         if max_diff <= self.tolerance:
             return CheckResult(name=name, status=CheckStatus.PASS,
-                               message=f"Max diff={max_diff:.2e} ≤ tol={self.tolerance:.1e}"), max_diff
-        else:
-            return CheckResult(name=name, status=CheckStatus.FAIL,
-                               message=f"Numerical regression: max diff={max_diff:.2e}"), max_diff
+                               message=f"Max diff={max_diff:.2e} ≤ tol={self.tolerance:.1e} "
+                                       f"({len(floats_o)} values)"), max_diff
+        return CheckResult(name=name, status=CheckStatus.FAIL,
+                           message=f"Numerical regression: max diff={max_diff:.2e} "
+                                   f"> tol={self.tolerance:.1e}"), max_diff
 
     # ── Diff sanity ───────────────────────────────────────────────────────────
 
