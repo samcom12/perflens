@@ -441,3 +441,95 @@ class TestDocsBugs:
         # malloc loop must never be offloaded
         if res is not None:
             assert "#pragma omp target" not in res[0]
+
+
+# ── 2D (double**) harness support ─────────────────────────────────────────────
+
+class TestHarness2D:
+    def _gcc(self):
+        return shutil.which("gcc") is not None
+
+    def test_discovers_2d_kernel_skips_memory_funcs(self):
+        from perflens.validator.harness import discover_kernels
+        from pathlib import Path
+        import tempfile, textwrap
+        d = Path(tempfile.mkdtemp())
+        src = d / "s.c"
+        src.write_text(textwrap.dedent("""\
+            #include <stdlib.h>
+            static double **alloc2d(int n) {
+                double **a = malloc(n*sizeof(double*));
+                for (int i=0;i<n;i++) a[i]=malloc(n*sizeof(double));
+                return a;
+            }
+            static void free2d(double **a, int n) {
+                for (int i=0;i<n;i++) free(a[i]);
+                free(a);
+            }
+            void smooth(double **u, double **v, int n) {
+                for (int i=1;i<n-1;i++)
+                    for (int j=1;j<n-1;j++)
+                        v[i][j] = 0.25*(u[i-1][j]+u[i+1][j]+u[i][j-1]+u[i][j+1]);
+            }
+        """))
+        ks = discover_kernels(src, "c")
+        assert len(ks) == 1
+        # Must pick the compute kernel, not alloc2d/free2d
+        assert ks[0].name == "smooth"
+
+    def test_2d_harness_accepts_correct_rejects_wrong(self, tmp_path):
+        if not self._gcc():
+            pytest.skip("gcc not available")
+        from perflens.validator.checker import PatchValidator
+        import textwrap
+        orig = tmp_path / "k.c"
+        orig.write_text(textwrap.dedent("""\
+            void smooth(double **u, double **v, int n) {
+                for (int i=1;i<n-1;i++)
+                    for (int j=1;j<n-1;j++)
+                        v[i][j] = 0.25*(u[i-1][j]+u[i+1][j]+u[i][j-1]+u[i][j+1]);
+            }
+        """))
+        good = tmp_path / "good.c"
+        good.write_text(textwrap.dedent("""\
+            void smooth(double **u, double **v, int n) {
+                #pragma omp parallel for
+                for (int i=1;i<n-1;i++)
+                    for (int j=1;j<n-1;j++)
+                        v[i][j] = 0.25*(u[i-1][j]+u[i+1][j]+u[i][j-1]+u[i][j+1]);
+            }
+        """))
+        bad = tmp_path / "bad.c"
+        bad.write_text(textwrap.dedent("""\
+            void smooth(double **u, double **v, int n) {
+                for (int i=1;i<n-1;i++)
+                    for (int j=1;j<n-1;j++)
+                        v[i][j] = 0.20*(u[i-1][j]+u[i+1][j]+u[i][j-1]+u[i][j+1]);
+            }
+        """))
+        v = PatchValidator()
+        assert v.validate(orig, good).verdict == "passed"
+        assert v.validate(orig, bad).verdict == "failed"
+
+    def test_2d_harness_handles_source_with_own_main(self, tmp_path):
+        if not self._gcc():
+            pytest.skip("gcc not available")
+        from perflens.validator.checker import PatchValidator
+        import textwrap
+        body = textwrap.dedent("""\
+            #include <stdio.h>
+            #define N 64
+            void scale2d(double **u, int n) {
+                for (int i=0;i<n;i++)
+                    for (int j=0;j<n;j++)
+                        u[i][j] = u[i][j] * 2.0;
+            }
+            int main(void){ printf("hi\\n"); return 0; }
+        """)
+        orig = tmp_path / "k.c"; orig.write_text(body)
+        patched = tmp_path / "p.c"
+        patched.write_text(body.replace("void scale2d(double **u, int n) {",
+                                        "void scale2d(double **u, int n) {\n    #pragma omp parallel for"))
+        # Source defines its own main() and N — harness must still work
+        rep = PatchValidator().validate(orig, patched)
+        assert rep.verdict == "passed"

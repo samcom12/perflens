@@ -5,7 +5,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ---
 
-## [0.3.1] — Correctness Fixes (main-branch audit)
+## [0.3.2] — 2D Kernel Verification
+
+### Added
+- **Auto-harness now verifies `double**` / `float**` (2D) kernels**
+  (`validator/harness.py`). Previously only `double*`/scalar kernels could be
+  checked, so common 2D HPC kernels (stencils, grids, matrices-of-rows) came
+  back `unverified`. The harness now allocates seeded M×M row-major arrays,
+  passes the matching dimension to integer size params, and checksums all 2D
+  outputs. The example `stencil.c` (a `double**` Jacobi stencil) now validates
+  as `passed` with numerical diff 0.0 on both CPU and GPU profiles, and a
+  numerically-wrong patch is correctly rejected.
+
+### Fixed
+- Harness no longer selects memory-management / I/O functions (`alloc2d`,
+  `free2d`, etc.) as the kernel under test — these are skipped so it picks the
+  real compute kernel.
+- Harness handles kernel sources that define their own `main()` (renamed via a
+  scoped macro during inclusion) and sources with their own `#define N/M`
+  (driver macros are PerfLens-prefixed `PLN_N`/`PLN_M` to avoid collisions).
+
+### Tests
+- 3 new tests in `test_correctness_fixes.py` (2D discovery + skip memory funcs,
+  2D accept/reject, source-with-own-main). Total: 293 passing (was 290).
+
+---
+
 
 This release fixes a class of bugs where the framework could emit
 non-compiling or numerically-wrong "optimized" code and still report success.

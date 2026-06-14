@@ -75,6 +75,7 @@ _SKIP_NAMES = {"main"}
 # Synthesisable parameter types.
 _INT_TYPES    = ("int", "long", "size_t", "unsigned", "unsigned int")
 _DBL_PTR_RE   = re.compile(r"^(const\s+)?(double|float)\s*\*$")
+_DBL_PTR2_RE  = re.compile(r"^(const\s+)?(double|float)\s*\*\*$")
 _INT_RE       = re.compile(r"^(const\s+)?(int|long|size_t|unsigned(?:\s+int)?)$")
 _DBL_RE       = re.compile(r"^(const\s+)?(double|float)$")
 
@@ -109,7 +110,9 @@ def _is_synthesisable(k: Kernel) -> bool:
         return False
     has_array = False
     for p in k.params:
-        if _DBL_PTR_RE.match(p.type_str):
+        if _DBL_PTR2_RE.match(p.type_str):
+            has_array = True
+        elif _DBL_PTR_RE.match(p.type_str):
             has_array = True
         elif _INT_RE.match(p.type_str):
             pass
@@ -138,10 +141,31 @@ def discover_kernels(source: Path, language: str) -> list[Kernel]:
         k = Kernel(name=name,
                    return_type=_normalise_type(m.group("ret")),
                    params=params)
-        if _is_synthesisable(k):
-            kernels.append(k)
-    # Only harness the FIRST synthesisable kernel to keep the driver simple and
-    # deterministic; comparing one kernel is enough to catch races / FP changes.
+        if not _is_synthesisable(k):
+            continue
+        # Skip memory-management / I/O functions — calling these with seeded
+        # data is unsafe (e.g. free() on our arrays) and they are not compute
+        # kernels whose numerical output we can compare.
+        brace = text.find("{", m.end() - 1)
+        body = ""
+        if brace != -1:
+            depth, i, n = 0, brace, len(text)
+            while i < n:
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        body = text[brace:i + 1]
+                        break
+                i += 1
+        if re.search(r"\b(malloc|calloc|realloc|free|fopen|fwrite|fread|"
+                     r"fclose|fprintf|printf|scanf|exit)\s*\(", body):
+            continue
+        kernels.append(k)
+    # Only harness the FIRST synthesisable compute kernel to keep the driver
+    # simple and deterministic; comparing one kernel is enough to catch races /
+    # FP changes.
     return kernels[:1]
 
 
@@ -150,25 +174,44 @@ def _emit_driver(source_name: str, kernel: Kernel, n: int = 257,
     """Generate C/C++ driver source that calls *kernel* and prints a checksum."""
     decls: list[str] = []
     args:  list[str] = []
-    out_arrays: list[str] = []
+    out_arrays: list[str] = []      # 1D output arrays to checksum
+    out_2d: list[str] = []          # 2D output arrays to checksum
+
+    # If the kernel takes any 2D (double**) array, integer size params refer to
+    # the 2D dimension M (n x n), not the 1D length N. Detect that up front.
+    has_2d = any(_DBL_PTR2_RE.match(p.type_str) for p in kernel.params)
+    # Use PerfLens-prefixed macro names so they never collide with #defines
+    # in the kernel source (which is #included into this driver).
+    size_token = "PLN_M" if has_2d else "PLN_N"
 
     arr_idx = 0
     for p in kernel.params:
-        if _DBL_PTR_RE.match(p.type_str):
+        if _DBL_PTR2_RE.match(p.type_str):
+            arr = f"mat{arr_idx}"
+            arr_idx += 1
+            # Allocate an M x M row-major 2D array (array of row pointers).
+            decls.append(f"    double **{arr} = (double**)malloc(sizeof(double*)*PLN_M);")
+            decls.append(f"    for (int _r = 0; _r < PLN_M; _r++) {{")
+            decls.append(f"        {arr}[_r] = (double*)malloc(sizeof(double)*PLN_M);")
+            decls.append(f"        for (int _c = 0; _c < PLN_M; _c++) "
+                         f"{arr}[_r][_c] = sin(0.3*(_r*PLN_M+_c) + {arr_idx}) + 1.5;")
+            decls.append(f"    }}")
+            args.append(arr)
+            if not p.type_str.startswith("const"):
+                out_2d.append(arr)
+        elif _DBL_PTR_RE.match(p.type_str):
             arr = f"arr{arr_idx}"
             arr_idx += 1
-            decls.append(f"    double *{arr} = (double*)malloc(sizeof(double)*N);")
-            # Deterministic seeded init (independent of param order).
+            decls.append(f"    double *{arr} = (double*)malloc(sizeof(double)*{size_token});")
             decls.append(
-                f"    for (int i = 0; i < N; i++) "
+                f"    for (int i = 0; i < {size_token}; i++) "
                 f"{arr}[i] = sin(0.3*i + {arr_idx}) + 1.5;")
             args.append(arr)
-            # Non-const arrays are potential outputs → checksum them.
             if not p.type_str.startswith("const"):
                 out_arrays.append(arr)
         elif _INT_RE.match(p.type_str):
-            # Pass the problem size for the first int; small constants otherwise.
-            decls.append(f"    {p.type_str} {p.name}_v = N;")
+            # Pass the problem size (M for 2D kernels, N for 1D).
+            decls.append(f"    {p.type_str} {p.name}_v = {size_token};")
             args.append(f"{p.name}_v")
         elif _DBL_RE.match(p.type_str):
             decls.append(f"    {p.type_str} {p.name}_v = 2.0;")
@@ -183,14 +226,23 @@ def _emit_driver(source_name: str, kernel: Kernel, n: int = 257,
     checksum_lines = []
     for arr in out_arrays:
         checksum_lines.append(
-            f"    {{ double s = 0; for (int i=0;i<N;i++) s += {arr}[i]*(i+1); "
+            f"    {{ double s = 0; for (int i=0;i<{size_token};i++) s += {arr}[i]*(i+1); "
+            f"printf(\"SUM_{arr} %.10e\\n\", s); }}")
+    for arr in out_2d:
+        checksum_lines.append(
+            f"    {{ double s = 0; for (int _r=0;_r<PLN_M;_r++) for (int _c=0;_c<PLN_M;_c++) "
+            f"s += {arr}[_r][_c]*((_r*PLN_M+_c)+1); "
             f"printf(\"SUM_{arr} %.10e\\n\", s); }}")
 
     includes = "#include <stdio.h>\n#include <stdlib.h>\n#include <math.h>\n"
+    # PerfLens-prefixed dimension macros (undef first in case the source defines
+    # the same names). For 2D kernels use a smaller dimension to bound n^2/n^3 work.
+    dim_defines = f"#define PLN_N {n}\n"
+    if has_2d:
+        dim_defines += "#define PLN_M 48\n"
     # Bring in the kernel declarations by including the source directly.
     body = f"""{includes}
-#define N {n}
-
+{dim_defines}
 /* kernel under test is compiled in the same TU via the source file */
 extern int __perflens_unused;
 
@@ -233,7 +285,17 @@ def build_harness(
         driver = tmp / f"perflens_harness{driver_ext}"
         driver_src = _emit_driver(source.name, kernel, lang=language)
         # Prepend an #include of the kernel source so the driver can call it.
-        driver_src = f'#include "{source.name}"\n' + driver_src
+        # If the source defines its own main(), rename it via a macro so it does
+        # not collide with the harness main(). The macro is scoped to the
+        # included source only (we #undef immediately after).
+        src_has_main = bool(re.search(r"\bint\s+main\s*\(", src_copy.read_text(errors="replace")))
+        include_block = ""
+        if src_has_main:
+            include_block += "#define main __perflens_src_main\n"
+        include_block += f'#include "{source.name}"\n'
+        if src_has_main:
+            include_block += "#undef main\n"
+        driver_src = include_block + driver_src
         driver.write_text(driver_src)
 
         binary = tmp / "perflens_harness_bin"
