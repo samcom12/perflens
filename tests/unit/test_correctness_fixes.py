@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+from perflens.validator.checker import PatchValidator
+
 from perflens.optimizer.rules.base_rule import RuleContext
 from perflens.hardware.database import HardwareDatabase
 
@@ -533,3 +535,145 @@ class TestHarness2D:
         # Source defines its own main() and N — harness must still work
         rep = PatchValidator().validate(orig, patched)
         assert rep.verdict == "passed"
+
+
+# ── Validator include-path and environment-skip fixes ─────────────────────────
+
+class TestValidatorIncludeAndSkip:
+    def _gcc(self):
+        return shutil.which("gcc") is not None
+
+    def test_relative_include_resolved_for_patched_file(self, tmp_path):
+        """Patched files in a temp dir must still compile when original has
+        relative #includes (validator now passes -I<orig_dir>)."""
+        if not self._gcc():
+            pytest.skip("gcc not available")
+        include = tmp_path / "include"
+        include.mkdir()
+        (include / "utils.h").write_text("double helper(double x);")
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        orig = src_dir / "kernel.c"
+        orig.write_text('#include "../include/utils.h"\nvoid k(double *a, int n){for(int i=0;i<n;i++)a[i]=helper(a[i]);}\n')
+        # Patched file goes to a random temp dir — relative include breaks without -I
+        import tempfile
+        p_dir = Path(tempfile.mkdtemp())
+        patched = p_dir / "kernel.c"
+        patched.write_text(orig.read_text().replace("a[i]=helper(a[i])", "a[i]=helper(a[i])*1.0"))
+        rep = PatchValidator().validate(orig, patched)
+        # Should compile (PASS or SKIP for harness) — not FAIL
+        assert rep.verdict != "failed", f"Expected not-failed, got {rep.verdict}"
+
+    def test_missing_mod_file_skips_not_fails(self, tmp_path):
+        """Fortran files requiring a .mod from another TU should SKIP not FAIL."""
+        if not shutil.which("gfortran"):
+            pytest.skip("gfortran not available")
+        src = tmp_path / "prog.f90"
+        src.write_text(textwrap.dedent("""\
+            PROGRAM test
+              USE some_module
+              IMPLICIT NONE
+            END PROGRAM
+        """))
+        pat = tmp_path / "prog_patched.f90"
+        pat.write_text(src.read_text())
+        rep = PatchValidator().validate(src, pat)
+        # Missing some_module.mod → SKIP, not FAIL
+        compile_checks = [c for c in rep.checks if "Compile" in c.name]
+        for cc in compile_checks:
+            from perflens.validator.models import CheckStatus
+            assert cc.status != CheckStatus.FAIL, \
+                f"Missing .mod should SKIP not FAIL: {cc.message}"
+
+
+# ── Fortran MPI non-blocking rule correctness ─────────────────────────────────
+
+class TestFortranMPIFixes:
+    def test_no_injection_before_module(self, cpu_hw):
+        """IMPLICIT NONE match must not fire on comment lines."""
+        from perflens.optimizer.rules.fortran_rules import FortranMPINonBlockingRule
+        src = textwrap.dedent("""\
+            ! Has IMPLICIT NONE in comment
+            MODULE mymod
+              IMPLICIT NONE
+            CONTAINS
+              SUBROUTINE work()
+                USE mpi
+                IMPLICIT NONE
+                CALL MPI_SEND(buf, 1, MPI_DOUBLE_PRECISION, 1, 0, MPI_COMM_WORLD, ierr)
+                CALL MPI_RECV(buf, 1, MPI_DOUBLE_PRECISION, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
+              END SUBROUTINE
+            END MODULE
+        """)
+        ctx = _ctx(src, "fortran", cpu_hw)
+        res = FortranMPINonBlockingRule().apply(ctx)
+        if res is not None:
+            out = res[0]
+            # INTEGER declaration must not appear before MODULE
+            module_pos = out.upper().find("MODULE MYMOD")
+            int_pos    = out.upper().find("INTEGER :: REQ")
+            assert int_pos > module_pos or int_pos == -1, \
+                "INTEGER decl must not appear before MODULE keyword"
+
+    def test_waitall_on_own_line(self, cpu_hw):
+        """MPI_WAITALL must be on its own line, not concatenated with OMP END."""
+        from perflens.optimizer.rules.fortran_rules import FortranMPINonBlockingRule
+        src = textwrap.dedent("""\
+            SUBROUTINE halo(u, n)
+              USE mpi
+              IMPLICIT NONE
+              INTEGER, INTENT(IN) :: n
+              REAL(8) :: u(n)
+              INTEGER :: ierr
+              !$OMP PARALLEL DO
+              DO i = 1, n
+                u(i) = u(i) * 2.0_8
+              END DO
+              !$OMP END PARALLEL DO
+              CALL MPI_SEND(u, n, MPI_DOUBLE_PRECISION, 1, 0, MPI_COMM_WORLD, ierr)
+              CALL MPI_RECV(u, n, MPI_DOUBLE_PRECISION, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE, ierr)
+            END SUBROUTINE
+        """)
+        ctx = _ctx(src, "fortran", cpu_hw)
+        res = FortranMPINonBlockingRule().apply(ctx)
+        if res is not None:
+            for line in res[0].splitlines():
+                if "MPI_WAITALL" in line.upper():
+                    # Must not share a line with any other statement
+                    stripped = line.strip()
+                    assert stripped.upper().startswith("CALL MPI_WAITALL"), \
+                        f"MPI_WAITALL not alone on its line: {line!r}"
+
+
+# ── C MPI non-blocking ifdef guard ───────────────────────────────────────────
+
+class TestCMPIIfdefGuard:
+    def test_skips_ifdef_guarded_mpi(self, cpu_hw):
+        from perflens.optimizer.rules.c_rules import MPINonBlockingRule
+        src = textwrap.dedent("""\
+            #include <stdio.h>
+            #ifdef USE_MPI
+            #include <mpi.h>
+            #endif
+            static void halo(double *buf, int n) {
+            #ifdef USE_MPI
+                MPI_Send(buf, n, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+                MPI_Recv(buf, n, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            #endif
+            }
+        """)
+        ctx = _ctx(src, "c", cpu_hw)
+        # Rule must not fire when mpi.h is ifdef-guarded
+        assert not MPINonBlockingRule().applies(ctx)
+
+    def test_applies_unconditional_mpi(self, cpu_hw):
+        from perflens.optimizer.rules.c_rules import MPINonBlockingRule
+        src = textwrap.dedent("""\
+            #include <mpi.h>
+            void halo(double *buf, int n) {
+                MPI_Send(buf, n, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+                MPI_Recv(buf, n, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+        """)
+        ctx = _ctx(src, "c", cpu_hw)
+        assert MPINonBlockingRule().applies(ctx)

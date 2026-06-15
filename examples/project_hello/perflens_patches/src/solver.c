@@ -24,18 +24,15 @@
 
 static void halo_exchange(double *arr, int n, int rank, int nprocs)
 {
-    MPI_Request req[4];
-    MPI_Status  stat[4];
-
 #ifdef USE_MPI
     /* ANTI-PATTERN: blocking halo exchange stalls all ranks */
     if (rank > 0) {
-        MPI_Isend(&arr[1],   1, MPI_DOUBLE, rank-1, 0, MPI_COMM_WORLD, &req[0]);
-        MPI_Irecv(&arr[0],   1, MPI_DOUBLE, rank-1, 1, MPI_COMM_WORLD, &req[2]);
+        MPI_Send(&arr[1],   1, MPI_DOUBLE, rank-1, 0, MPI_COMM_WORLD);
+        MPI_Recv(&arr[0],   1, MPI_DOUBLE, rank-1, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
     if (rank < nprocs - 1) {
-        MPI_Isend(&arr[n-2], 1, MPI_DOUBLE, rank+1, 1, MPI_COMM_WORLD, &req[1]);
-        MPI_Irecv(&arr[n-1], 1, MPI_DOUBLE, rank+1, 0, MPI_COMM_WORLD, &req[3]);
+        MPI_Send(&arr[n-2], 1, MPI_DOUBLE, rank+1, 1, MPI_COMM_WORLD);
+        MPI_Recv(&arr[n-1], 1, MPI_DOUBLE, rank+1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
 #endif
 }
@@ -109,7 +106,5 @@ int main(int argc, char **argv)
 #ifdef USE_MPI
     MPI_Finalize();
 #endif
-    MPI_Waitall(4, req, stat);
-
     return 0;
 }

@@ -299,7 +299,10 @@ def build_harness(
         driver.write_text(driver_src)
 
         binary = tmp / "perflens_harness_bin"
-        cmd = [compiler] + flags + [str(driver), "-o", str(binary)] + link_libs
+        # Add -I so relative #includes in the kernel source resolve correctly
+        # even when the driver is compiled from a temp directory.
+        include_flags = [f"-I{source.parent}", f"-I{source.parent.parent}"]
+        cmd = [compiler] + flags + include_flags + [str(driver), "-o", str(binary)] + link_libs
         try:
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired:

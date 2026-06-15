@@ -614,7 +614,23 @@ class MPINonBlockingRule(TransformRule):
     def applies(self, ctx: RuleContext) -> bool:
         if ctx.language not in self.supported_languages:
             return False
-        return bool(_MPI_SEND.search(ctx.source) or _MPI_RECV.search(ctx.source))
+        if not (_MPI_SEND.search(ctx.source) or _MPI_RECV.search(ctx.source)):
+            return False
+        # Only transform when mpi.h is unconditionally included. If MPI calls
+        # are inside an #ifdef USE_MPI block but the declaration injected by
+        # _make_nonblocking_c (MPI_Request/MPI_Status) lands outside it, the
+        # resulting code won't compile without the USE_MPI define. Detect this
+        # by checking that the #include <mpi.h> is not preceded by an #ifdef on
+        # the same or immediately prior line.
+        mpi_include = re.search(r'^#\s*include\s*[<"]mpi\.h[>"]', ctx.source, re.MULTILINE)
+        if not mpi_include:
+            return False
+        # Find the line before the #include; if it is an #ifdef, skip.
+        line_start = ctx.source.rfind("\n", 0, mpi_include.start()) + 1
+        prev_line = ctx.source[:line_start].rstrip().rsplit("\n", 1)[-1].strip()
+        if prev_line.startswith("#ifdef") or prev_line.startswith("#if "):
+            return False
+        return True
 
     def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
         new_source, n_replaced = _make_nonblocking_c(ctx.source)

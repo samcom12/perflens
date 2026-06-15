@@ -278,34 +278,101 @@ class FortranMPINonBlockingRule(TransformRule):
 
     def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
         source = ctx.source
-        n = 0
-        source, ns = _F_MPI_SEND.subn(
-            lambda m: m.group(0)
-                .replace("MPI_SEND", "MPI_ISEND", 1)
-                .rstrip(")")
-                + f", req({n+1}, err)",
-            source,
-        )
-        n += ns
-        source, nr = _F_MPI_RECV.subn(
-            lambda m: m.group(0)
-                .replace("MPI_RECV", "MPI_IRECV", 1)
-                .replace("MPI_STATUS_IGNORE", "")
-                .rstrip(")")
-                + f", req({n+1}, err)",
-            source,
-        )
-        n += nr
+
+        # Count sends and recvs first (needed for array sizes).
+        ns = len(_F_MPI_SEND.findall(source))
+        nr = len(_F_MPI_RECV.findall(source))
+        n  = ns + nr
         if n == 0:
             return None
 
-        # Add request declaration and waitall (best-effort, before END PROGRAM/SUBROUTINE)
+        # Convert MPI_SEND → MPI_ISEND with request args.
+        req_idx = [0]   # list to allow mutation inside lambda
+
+        def _send_repl(m: re.Match) -> str:
+            req_idx[0] += 1
+            return (m.group(0)
+                    .replace("MPI_SEND", "MPI_ISEND", 1)
+                    .rstrip(")")
+                    + f", req({req_idx[0]}), err)")
+
+        def _recv_repl(m: re.Match) -> str:
+            req_idx[0] += 1
+            return (m.group(0)
+                    .replace("MPI_RECV", "MPI_IRECV", 1)
+                    .replace("MPI_STATUS_IGNORE", "")
+                    .rstrip(")")
+                    + f", req({req_idx[0]}), err)")
+
+        source = _F_MPI_SEND.sub(_send_repl, source)
+        source = _F_MPI_RECV.sub(_recv_repl, source)
+
+        # Insert INTEGER declarations after the FIRST *code-level* IMPLICIT NONE
+        # (i.e. not one that appears only inside a comment or string).
         decl    = f"    INTEGER :: req({n}), err({n})\n"
-        waitall = f"    CALL MPI_WAITALL({n}, req, MPI_STATUSES_IGNORE, err)\n"
-        source  = re.sub(r"(IMPLICIT NONE\n)", r"\1" + decl, source, count=1, flags=re.IGNORECASE)
-        source  = re.sub(
-            r"(\n\s*(?:END\s+PROGRAM|END\s+SUBROUTINE|END\s+FUNCTION))",
-            waitall + r"\1",
+        waitall = f"\n    CALL MPI_WAITALL({n}, req, MPI_STATUSES_IGNORE, err)\n"
+
+        # Find IMPLICIT NONE that is a real statement (not in a comment: line
+        # must not start with ! before the keyword on the same source line).
+        impl_re = re.compile(r"^(?P<indent>[ \t]*)IMPLICIT\s+NONE[ \t]*$",
+                             re.IGNORECASE | re.MULTILINE)
+        impl_m = None
+        for m in impl_re.finditer(source):
+            # Check the line doesn't start with a comment marker
+            line_start = source.rfind("\n", 0, m.start()) + 1
+            prefix = source[line_start: m.start()]
+            if "!" not in prefix:
+                impl_m = m
+                break
+
+        if impl_m:
+            pos = impl_m.end()
+            source = source[:pos] + "\n" + decl + source[pos:]
+        else:
+            # No IMPLICIT NONE found — prepend to subroutine/program body
+            first_sub = re.search(
+                r"^([ \t]*(?:SUBROUTINE|PROGRAM|FUNCTION)\s+\w+[^\n]*\n)",
+                source, re.IGNORECASE | re.MULTILINE,
+            )
+            if first_sub:
+                pos = first_sub.end()
+                source = source[:pos] + decl + source[pos:]
+
+        # Insert MPI_WAITALL before the last END SUBROUTINE/PROGRAM/FUNCTION.
+        # Use a newline prefix so it is always on its own line, not appended to
+        # whatever precedes the END statement (e.g. an !$OMP END PARALLEL DO).
+        # Also add USE mpi in the same scope if it isn't already there, because
+        # MPI_STATUSES_IGNORE requires it to be defined.
+        use_mpi_line = "    USE mpi\n"
+        waitall_line = f"    CALL MPI_WAITALL({n}, req, MPI_STATUSES_IGNORE, err)\n"
+
+        # Find the PROGRAM/SUBROUTINE block that contains the END we're targeting.
+        end_m = re.search(
+            r"\n([ \t]*)(?:END\s+PROGRAM|END\s+SUBROUTINE|END\s+FUNCTION)\b",
+            source, flags=re.IGNORECASE,
+        )
+        if end_m:
+            # Check if USE mpi is already present in the surrounding block.
+            block_start = max(0, end_m.start() - 2000)
+            block = source[block_start: end_m.start()]
+            if not re.search(r"^\s*USE\s+mpi\b", block, re.IGNORECASE | re.MULTILINE):
+                # Find the subroutine/program header to inject USE mpi after it.
+                header_m = re.search(
+                    r"(^[ \t]*(?:PROGRAM|SUBROUTINE|FUNCTION)\s+\w+[^\n]*\n)",
+                    source[block_start:], re.IGNORECASE | re.MULTILINE,
+                )
+                if header_m:
+                    ins_pos = block_start + header_m.end()
+                    source = source[:ins_pos] + use_mpi_line + source[ins_pos:]
+                    # Re-find end_m after insertion
+                    end_m = re.search(
+                        r"\n([ \t]*)(?:END\s+PROGRAM|END\s+SUBROUTINE|END\s+FUNCTION)\b",
+                        source, flags=re.IGNORECASE,
+                    )
+
+        source = re.sub(
+            r"(\n)([ \t]*(?:END\s+PROGRAM|END\s+SUBROUTINE|END\s+FUNCTION)\b)",
+            "\n" + waitall_line + r"\1\2",
             source, count=1, flags=re.IGNORECASE,
         )
 

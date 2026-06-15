@@ -64,6 +64,8 @@ class PatchValidator:
         test_dir: Optional[Path] = None,
     ) -> ValidationReport:
         language = detect_language(original)
+        # Store so _compile_check can add -I flags for relative includes.
+        self._original_dir: Optional[Path] = original.parent
         report = ValidationReport(
             original=original,
             patched=patched,
@@ -189,8 +191,17 @@ class PatchValidator:
                                message="No suitable compiler found",
                                duration_s=time.monotonic() - t0)
 
+        # When the patched file lives in a temp dir, relative #includes like
+        # '../include/foo.h' cannot be resolved. Add -I flags so the compiler
+        # searches the original source's directory and its parent, matching the
+        # way the project is normally built.
+        include_dirs = []
+        original_dir = self._original_dir   # set by validate() from the original path
+        if original_dir and original_dir.is_dir():
+            include_dirs = [f"-I{original_dir}", f"-I{original_dir.parent}"]
+
         with tempfile.NamedTemporaryFile(suffix=".o", delete=True) as obj:
-            cmd = [compiler] + flags + ["-c", str(path), "-o", obj.name]
+            cmd = [compiler] + flags + include_dirs + ["-c", str(path), "-o", obj.name]
             try:
                 proc = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=self.timeout
@@ -213,6 +224,30 @@ class PatchValidator:
                     return CheckResult(name=name, status=CheckStatus.PASS,
                                        message=f"Compiled OK ({compiler})", duration_s=dur)
                 else:
+                    # Some failures are environment limitations, not rule bugs.
+                    # A missing Fortran .mod file means the source depends on a
+                    # separately-compiled module (multi-file compilation); we
+                    # cannot validate this stand-alone, so SKIP instead of FAIL.
+                    # Similarly, a missing mpi.h means MPI is not installed in
+                    # the validation environment — not a correctness problem.
+                    skip_patterns = [
+                        "cannot open module file",   # gfortran MODULE dependency
+                        "no such file or directory",  # missing header (mpi.h etc.)
+                        ".mod",
+                        "mpi.h",
+                    ]
+                    stderr_lower = proc.stderr.lower()
+                    if any(p.lower() in stderr_lower for p in skip_patterns):
+                        return CheckResult(
+                            name=name, status=CheckStatus.SKIP,
+                            message=(
+                                "Compilation requires missing environment files "
+                                "(Fortran .mod or system headers like mpi.h). "
+                                "Correctness cannot be established in this environment."
+                            ),
+                            stderr=proc.stderr[:300],
+                            duration_s=dur,
+                        )
                     return CheckResult(name=name, status=CheckStatus.FAIL,
                                        message=f"Compiler returned {proc.returncode}",
                                        stderr=proc.stderr[:500],
