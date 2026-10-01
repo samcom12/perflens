@@ -79,7 +79,7 @@ Running the compiler-feedback command with a nonexistent source file originally 
 
 ### FINDING-P4-03 — Invalid compiler value is silently accepted
 
-**Status:** Confirmed
+**Status:** Corrected and verified
 
 Passing an unsupported compiler value (`--compiler xyz`) did not produce an explicit validation error. PerfLens returned zero feedback instead.
 
@@ -87,6 +87,17 @@ Passing an unsupported compiler value (`--compiler xyz`) did not produce an expl
 - `P4-08-invalid-compiler.txt`
 
 **Classification:** PerfLens CLI/input-validation issue.
+
+**Correction:**
+`collect_feedback()` now validates the requested compiler after the supported GCC, Clang, and ICX branches. An unsupported compiler value raises `ValueError` instead of silently returning an empty compiler-feedback report.
+
+**Verification:**
+
+- Original `--compiler xyz` reproduction now raises `ValueError: Unsupported compiler: xyz`.
+- Focused compiler-feedback tests: 27 passed.
+- Normal GCC case-study regression remains unchanged: 3 vectorized loops, 12 logical missed-vectorization groups, and 8 aliasing failures.
+- Missing-source regression remains unchanged and raises `FileNotFoundError`.
+- Full test suite: 307 passed, 5 skipped.
 
 ---
 

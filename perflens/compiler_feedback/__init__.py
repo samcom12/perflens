@@ -74,7 +74,7 @@ def collect_feedback(
         return p.compile_and_parse(source, extra_flags=extra_flags, compiler=compiler)
 
     else:
-        return CompilerFeedbackReport(source=source, compiler=compiler)
+        raise ValueError(f"Unsupported compiler: {compiler}")
 
 
 __all__ = [

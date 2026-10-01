@@ -186,13 +186,12 @@ def test_collect_feedback_clang_log(tmp_path):
     report = collect_feedback(src, compiler="clang", report_file=log)
     assert len(report.remarks) > 0
 
-def test_collect_feedback_unknown_compiler_returns_empty(tmp_path):
+def test_collect_feedback_unknown_compiler_raises_value_error(tmp_path):
     from perflens.compiler_feedback import collect_feedback
     src = tmp_path / "solver.c"
     src.write_text("void f(){}")
-    # Nonexistent compiler, no report file — returns empty report, doesn't raise
-    report = collect_feedback(src, compiler="nvfortran_xyz_nonexistent")
-    assert isinstance(report, CompilerFeedbackReport)
+    with pytest.raises(ValueError, match="Unsupported compiler"):
+        collect_feedback(src, compiler="nvfortran_xyz_nonexistent")
 
 def test_collect_feedback_missing_source_raises_file_not_found(tmp_path):
     from perflens.compiler_feedback import collect_feedback
