@@ -194,6 +194,12 @@ def test_collect_feedback_unknown_compiler_returns_empty(tmp_path):
     report = collect_feedback(src, compiler="nvfortran_xyz_nonexistent")
     assert isinstance(report, CompilerFeedbackReport)
 
+def test_collect_feedback_missing_source_raises_file_not_found(tmp_path):
+    from perflens.compiler_feedback import collect_feedback
+
+    with pytest.raises(FileNotFoundError):
+        collect_feedback(tmp_path / "missing.c", compiler="gcc")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CompilerRemark model

@@ -38,6 +38,9 @@ def collect_feedback(
 
     Compiler auto-detection order: icx → clang → gcc
     """
+    if not source.exists():
+        raise FileNotFoundError(source)
+
     # Detect compiler if not specified
     if compiler is None:
         for candidate in ("icx", "clang", "gcc"):
