@@ -11,6 +11,8 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
+from perflens.source_regions import find_loop_regions
+
 
 class FeedbackKind(str, Enum):
     VECTORIZED          = "vectorized"
@@ -67,6 +69,28 @@ class CompilerFeedbackReport:
         return [r for r in self.remarks if r.kind == FeedbackKind.NOT_VECTORIZED]
 
     @property
+    def missed_vectorization_count(self) -> int:
+        try:
+            source_text = self.source.read_text(errors="replace")
+        except OSError:
+            source_text = ""
+        regions = find_loop_regions(source_text)
+        keys: set[tuple[Optional[str], int, int]] = set()
+        for remark in self.missed_vectorization:
+            containing = [
+                region for region in regions
+                if region.header_line <= remark.line <= source_text.count(
+                    "\n", 0, region.end_offset
+                ) + 1
+            ]
+            if containing:
+                region = min(containing, key=lambda item: item.end_offset - item.start_offset)
+                keys.add((remark.source_file, region.header_line, region.header_col))
+            else:
+                keys.add((remark.source_file, remark.line, remark.col))
+        return len(keys)
+
+    @property
     def alias_failures(self) -> list[CompilerRemark]:
         return [r for r in self.remarks if r.kind == FeedbackKind.ALIAS_CHECK]
 
@@ -86,7 +110,7 @@ class CompilerFeedbackReport:
 
     def print_summary(self, console: Console) -> None:
         vok  = len(self.vectorized_loops)
-        vmiss = len(self.missed_vectorization)
+        vmiss = self.missed_vectorization_count
         console.print(
             f"\n[bold cyan]Compiler Feedback[/bold cyan] ({self.compiler})\n"
             f"  Vectorized loops   : [green]{vok}[/green]\n"

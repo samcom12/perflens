@@ -56,7 +56,7 @@ def _build_unified_context(sf: SourceFile, graph: ProjectGraph) -> str:
     if sf.compiler_feedback:
         fb  = sf.compiler_feedback
         ok  = len(fb.vectorized_loops)
-        mis = len(fb.missed_vectorization)
+        mis = fb.missed_vectorization_count
         ali = len(fb.alias_failures)
         lines.append(
             f"\n## Compiler ({fb.compiler}): "

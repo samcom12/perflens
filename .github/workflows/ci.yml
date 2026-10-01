@@ -170,7 +170,7 @@ jobs:
           report = collect_feedback(src, compiler='gcc')
           print(f'GCC remarks: {len(report.remarks)}')
           print(f'  vectorized: {len(report.vectorized_loops)}')
-          print(f'  missed:     {len(report.missed_vectorization)}')
+          print(f'  missed:     {report.missed_vectorization_count}')
           hints = report.to_scanner_hints()
           print(f'  hints for LLM: {len(hints)}')
           "

@@ -96,7 +96,7 @@ class SourceFile:
 
         miss_count = 0
         if self.compiler_feedback:
-            miss_count = len(self.compiler_feedback.missed_vectorization)
+            miss_count = self.compiler_feedback.missed_vectorization_count
         compiler_score = min(miss_count * 2.0, 25.0)
 
         sev_weights = {Severity.CRITICAL: 3, Severity.HIGH: 2,
@@ -115,7 +115,7 @@ class SourceFile:
             "priority_score": self.priority_score,
             "includes":       [str(p) for p in self.includes],
             "findings":       len(self.scanner_findings),
-            "compiler_misses": len(self.compiler_feedback.missed_vectorization)
+            "compiler_misses": self.compiler_feedback.missed_vectorization_count
                                if self.compiler_feedback else 0,
             "optimized":      self.optimized_source is not None,
         }
@@ -194,7 +194,7 @@ class ProjectGraph:
         table.add_column("Optimized",  width=10, justify="center")
 
         for sf in self.source_files[:top_n]:
-            miss = (len(sf.compiler_feedback.missed_vectorization)
+            miss = (sf.compiler_feedback.missed_vectorization_count
                     if sf.compiler_feedback else "—")
             opt  = "[green]✓[/green]" if sf.optimized_source else "—"
             pct_color = ("red" if sf.hotspot_pct > 20

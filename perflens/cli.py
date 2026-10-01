@@ -443,7 +443,7 @@ def project_build(
     for sf in sorted(graph.source_files, key=lambda s: s.priority_score, reverse=True)[:5]:
         if sf.compiler_feedback:
             fb   = sf.compiler_feedback
-            miss = len(fb.missed_vectorization)
+            miss = fb.missed_vectorization_count
             vec  = len(fb.vectorized_loops)
             console.print(f"  [cyan]{sf.path.name}[/cyan]  "
                           f"vec={vec}  missed={miss}")

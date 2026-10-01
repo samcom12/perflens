@@ -219,6 +219,82 @@ def test_report_vectorized_loops_filter():
     assert len(report.vectorized_loops) == 2
     assert len(report.missed_vectorization) == 1
 
+
+def test_report_logical_missed_vectorization_count_same_loop(tmp_path):
+    source = tmp_path / "loops.c"
+    source.write_text("""void f(double *a, int n) {
+    for (int i = 0; i < n; ++i) {
+        a[i] = a[i] + 1;
+    }
+}
+""")
+    remarks = [
+        CompilerRemark("loops.c", 2, 5, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "header"),
+        CompilerRemark("loops.c", 3, 9, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "body"),
+        CompilerRemark("loops.c", 4, 1, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "close"),
+    ]
+    report = CompilerFeedbackReport(source=source, compiler="gcc", remarks=remarks)
+    assert report.missed_vectorization_count == 1
+    assert len(report.missed_vectorization) == 3
+
+
+def test_report_logical_missed_vectorization_count_same_location(tmp_path):
+    source = tmp_path / "loops.c"
+    source.write_text("void f(int *a, int n) { for (int i = 0; i < n; ++i) a[i]++; }\n")
+    remarks = [
+        CompilerRemark("loops.c", 1, 27, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "one"),
+        CompilerRemark("loops.c", 1, 27, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "two"),
+    ]
+    report = CompilerFeedbackReport(source=source, compiler="gcc", remarks=remarks)
+    assert report.missed_vectorization_count == 1
+    assert len(report.missed_vectorization) == 2
+
+
+def test_report_logical_missed_vectorization_count_separate_loops(tmp_path):
+    source = tmp_path / "loops.c"
+    source.write_text("""void f(int *a, int n) {
+    for (int i = 0; i < n; ++i) a[i]++;
+    for (int i = 0; i < n; ++i) a[i]--;
+}
+""")
+    remarks = [
+        CompilerRemark("loops.c", 2, 5, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "one"),
+        CompilerRemark("loops.c", 3, 5, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "two"),
+    ]
+    report = CompilerFeedbackReport(source=source, compiler="gcc", remarks=remarks)
+    assert report.missed_vectorization_count == 2
+
+
+def test_report_logical_missed_vectorization_count_nested_loop(tmp_path):
+    source = tmp_path / "loops.c"
+    source.write_text("""void f(int *a, int n) {
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j < n; ++j) {
+            a[j]++;
+        }
+    }
+}
+""")
+    remarks = [
+        CompilerRemark("loops.c", 2, 5, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "outer"),
+        CompilerRemark("loops.c", 4, 13, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "inner"),
+    ]
+    report = CompilerFeedbackReport(source=source, compiler="gcc", remarks=remarks)
+    assert report.missed_vectorization_count == 2
+
+
+def test_report_logical_missed_vectorization_count_fallback(tmp_path):
+    source = tmp_path / "loops.c"
+    source.write_text("void f(int *a) { a[0]++; }\n")
+    remarks = [
+        CompilerRemark("loops.c", 1, 22, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "one"),
+        CompilerRemark("loops.c", 1, 22, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "two"),
+        CompilerRemark("loops.c", 1, 23, FeedbackKind.NOT_VECTORIZED, "gcc", "lv", "three"),
+    ]
+    report = CompilerFeedbackReport(source=source, compiler="gcc", remarks=remarks)
+    assert report.missed_vectorization_count == 2
+    assert len(report.missed_vectorization) == 3
+
 def test_report_empty_hints():
     report = CompilerFeedbackReport(source=Path("f.c"), compiler="gcc")
     hints = report.to_scanner_hints()
