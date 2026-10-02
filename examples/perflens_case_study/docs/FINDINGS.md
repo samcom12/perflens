@@ -147,9 +147,16 @@ Verification:
 
 ### FINDING-P3-02 — Regex fallback misses `puts` and `fputs` loop I/O
 
-**Status:** Confirmed
+**Status:** Corrected and verified
 
-Under the regex-only C/C++ scanner path, loop I/O detection covers `printf`, `fprintf`, `fwrite`, and `fread`, but does not detect `puts` or `fputs`.
+Under the regex-only C/C++ scanner path, loop I/O detection previously covered `printf`, `fprintf`, `fwrite`, and `fread`, but did not detect `puts` or `fputs`. The AST path already included `puts` and `fputs`.
+
+The regex fallback was extended to recognize `puts` and `fputs`, matching the existing AST coverage.
+
+Verification:
+- P3-02 regression test passed
+- Scanner tests: 31 passed
+- Full test suite: 315 passed, 5 skipped
 
 **Evidence:**
 - P3-20

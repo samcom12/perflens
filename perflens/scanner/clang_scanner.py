@@ -50,7 +50,7 @@ _REGEX_PATTERNS: list[tuple[re.Pattern, FindingKind, Severity, str, str]] = [
     ),
     # printf/IO inside loop
     (
-        re.compile(r"for\s*\([^;]+;[^;]+;[^)]+\)[^{]*\{[^}]*\b(printf|fprintf|fwrite|fread)\s*\(", re.DOTALL),
+        re.compile(r"for\s*\([^;]+;[^;]+;[^)]+\)[^{]*\{[^}]*\b(printf|fprintf|fwrite|fread|puts|fputs)\s*\(", re.DOTALL),
         FindingKind.IO_IN_LOOP,
         Severity.HIGH,
         "I/O call inside compute loop — serialises execution",

@@ -87,6 +87,28 @@ def test_c_io_in_loop(tmp_path):
     assert FindingKind.IO_IN_LOOP in kinds
 
 
+def test_c_io_fallback_detects_puts_and_fputs(tmp_path):
+    from perflens.scanner.clang_scanner import ClangScanner
+
+    source = textwrap.dedent("""\
+        void dump_lines(char **lines, int n, FILE *out) {
+            for (int i = 0; i < n; ++i) {
+                puts(lines[i]);
+            }
+            for (int i = 0; i < n; ++i) {
+                fputs(lines[i], out);
+            }
+        }
+    """)
+    findings = ClangScanner()._regex_scan(tmp_path / "io.c", source)
+
+    io_findings = [
+        finding for finding in findings
+        if finding.kind == FindingKind.IO_IN_LOOP
+    ]
+    assert len(io_findings) == 2
+
+
 def test_c_mpi_blocking(tmp_path):
     f = _write_tmp(tmp_path, "mpi.c", C_MPI_BLOCKING)
     findings = scan_file(f, language="c")
