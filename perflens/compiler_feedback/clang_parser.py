@@ -20,7 +20,9 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+import yaml
 
 from perflens.compiler_feedback.models import (
     CompilerFeedbackReport,
@@ -35,6 +37,23 @@ _CLANG_REMARK = re.compile(
     r"(?P<msg>.+?)\s+\[-R(?:pass|pass-missed|pass-analysis)=(?P<pass>[^\]]+)\]"
 )
 _CLANG_MISSED = re.compile(r"-Rpass-missed=")
+
+
+class _OptimizationRecordLoader(yaml.SafeLoader):
+    pass
+
+
+def _construct_optimization_record(
+    loader: Any, tag_suffix: str, node: Any
+) -> dict[str, Any]:
+    record = loader.construct_mapping(node, deep=True)
+    record["_record_type"] = tag_suffix
+    return record
+
+
+_OptimizationRecordLoader.add_multi_constructor(
+    "!", _construct_optimization_record
+)
 
 # ── Intel ICX .optrpt ─────────────────────────────────────────────────────────
 
@@ -74,19 +93,71 @@ class ClangFeedbackParser:
             "-Rpass-missed=loop-vectorize",
             "-Rpass-analysis=loop-vectorize",
             "-Rpass=inline",
+            "-fsave-optimization-record",
         ] + (extra_flags or [])
 
-        with tempfile.NamedTemporaryFile(suffix=".o", delete=True) as obj:
-            cmd = [compiler] + flags + ["-c", str(source), "-o", obj.name]
+        with tempfile.TemporaryDirectory() as tmpdir:
+            obj = Path(tmpdir) / "output.o"
+            record_path = Path(tmpdir) / "optimization.opt.yaml"
+            record_flags = flags + [f"-foptimization-record-file={record_path}"]
+            cmd = [compiler] + record_flags + ["-c", str(source), "-o", str(obj)]
             try:
                 proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
                 text = proc.stderr   # Clang remarks go to stderr
             except subprocess.TimeoutExpired:
                 return CompilerFeedbackReport(source=source, compiler=compiler)
 
-        report = self._parse_text(text, source)
-        report.flags_used = flags
-        return report
+            report = self._parse_text(text, source)
+            if (
+                not report.vectorized_loops
+                and not report.missed_vectorization
+                and record_path.exists()
+            ):
+                report = self._parse_yaml(record_path, source)
+            report.flags_used = record_flags
+            return report
+
+    def _parse_yaml(self, path: Path, source: Path) -> CompilerFeedbackReport:
+        remarks: list[CompilerRemark] = []
+        with path.open(errors="replace") as stream:
+            for record in yaml.load_all(stream, Loader=_OptimizationRecordLoader):
+                if not isinstance(record, dict):
+                    continue
+                if record.get("Pass") != "loop-vectorize":
+                    continue
+
+                debug_loc = record.get("DebugLoc") or {}
+                if not isinstance(debug_loc, dict):
+                    debug_loc = {}
+                record_type = record.get("_record_type")
+                if record_type == "Passed":
+                    kind = FeedbackKind.VECTORIZED
+                elif record_type == "Missed":
+                    kind = FeedbackKind.NOT_VECTORIZED
+                elif record_type == "Analysis":
+                    kind = FeedbackKind.GENERAL
+                else:
+                    continue
+
+                message = str(record.get("Name") or "loop-vectorize")
+                args = record.get("Args")
+                if args:
+                    message += f": {args}"
+                remarks.append(CompilerRemark(
+                    source_file=str(debug_loc.get("File") or source),
+                    line=int(debug_loc.get("Line") or 0),
+                    col=int(debug_loc.get("Column") or 0),
+                    kind=kind,
+                    compiler="clang",
+                    pass_name="loop-vectorize",
+                    message=message,
+                ))
+
+        return CompilerFeedbackReport(
+            source=source,
+            compiler="clang",
+            remarks=sorted(remarks, key=lambda r: r.line),
+        )
 
     def _parse_text(self, text: str, source: Path) -> CompilerFeedbackReport:
         remarks: list[CompilerRemark] = []

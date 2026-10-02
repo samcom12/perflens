@@ -308,6 +308,7 @@ def test_compiler_output_json(c_file, gcc_log, tmp_path):
     result = runner.invoke(app, [
         "compiler", str(c_file),
         "--report", str(gcc_log),
+        "--compiler", "gcc",
         "--output", str(out),
     ])
     assert result.exit_code == 0

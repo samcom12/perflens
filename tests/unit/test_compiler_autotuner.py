@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import textwrap
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -110,6 +111,121 @@ def test_clang_missed_vectorization(tmp_path):
     log.write_text(CLANG_REMARKS)
     report = ClangFeedbackParser().parse_file(log, source=Path("stencil.c"))
     assert len(report.missed_vectorization) >= 2
+
+
+def test_clang_parse_yaml_passed_loop_vectorize(tmp_path):
+    from perflens.compiler_feedback.clang_parser import ClangFeedbackParser
+    record = tmp_path / "passed.opt.yaml"
+    record.write_text(textwrap.dedent("""\
+        --- !Passed
+        Pass: loop-vectorize
+        Name: Vectorized
+        DebugLoc: { File: stencil.c, Line: 42, Column: 5 }
+        Args:
+          - VectorizationFactor: 4
+        """))
+
+    report = ClangFeedbackParser()._parse_yaml(record, source=Path("stencil.c"))
+
+    assert len(report.vectorized_loops) == 1
+    assert report.vectorized_loops[0].source_file == "stencil.c"
+    assert report.vectorized_loops[0].line == 42
+    assert report.vectorized_loops[0].col == 5
+    assert report.vectorized_loops[0].pass_name == "loop-vectorize"
+    assert "Vectorized" in report.vectorized_loops[0].message
+
+
+def test_clang_parse_yaml_missed_loop_vectorize(tmp_path):
+    from perflens.compiler_feedback.clang_parser import ClangFeedbackParser
+    record = tmp_path / "missed.opt.yaml"
+    record.write_text(textwrap.dedent("""\
+        --- !Missed
+        Pass: loop-vectorize
+        Name: Missed
+        DebugLoc: { File: stencil.c, Line: 87, Column: 9 }
+        Args:
+          - Reason: cannot identify array bounds
+        """))
+
+    report = ClangFeedbackParser()._parse_yaml(record, source=Path("stencil.c"))
+
+    assert len(report.missed_vectorization) == 1
+    assert report.missed_vectorization[0].line == 87
+    assert report.missed_vectorization[0].col == 9
+    assert "cannot identify array bounds" in report.missed_vectorization[0].message
+
+
+def test_clang_parse_yaml_ignores_unrelated_passes(tmp_path):
+    from perflens.compiler_feedback.clang_parser import ClangFeedbackParser
+    record = tmp_path / "unrelated.opt.yaml"
+    record.write_text(textwrap.dedent("""\
+        --- !Passed
+        Pass: asm-printer
+        Name: Emitted
+        DebugLoc: { File: stencil.c, Line: 10, Column: 1 }
+        --- !Missed
+        Pass: loop-unroll
+        Name: NotUnrolled
+        DebugLoc: { File: stencil.c, Line: 20, Column: 1 }
+        """))
+
+    report = ClangFeedbackParser()._parse_yaml(record, source=Path("stencil.c"))
+
+    assert report.vectorized_loops == []
+    assert report.missed_vectorization == []
+
+
+def test_clang_parse_yaml_without_loop_vectorize_records(tmp_path):
+    from perflens.compiler_feedback.clang_parser import ClangFeedbackParser
+    record = tmp_path / "analysis.opt.yaml"
+    record.write_text(textwrap.dedent("""\
+        --- !Analysis
+        Pass: loop-unroll
+        Name: AnalysisOnly
+        DebugLoc: { File: stencil.c, Line: 20, Column: 1 }
+        """))
+
+    report = ClangFeedbackParser()._parse_yaml(record, source=Path("stencil.c"))
+
+    assert report.vectorized_loops == []
+    assert report.missed_vectorization == []
+
+
+def test_clang_compile_falls_back_to_yaml_without_vectorization_text(tmp_path):
+    from perflens.compiler_feedback.clang_parser import ClangFeedbackParser
+    source = tmp_path / "stencil.c"
+    source.write_text("void f(void) {}\n")
+
+    def fake_run(command, **kwargs):
+        record_flag = next(
+            flag for flag in command
+            if flag.startswith("-foptimization-record-file=")
+        )
+        record_path = Path(record_flag.split("=", 1)[1])
+        record_path.write_text(textwrap.dedent("""\
+            --- !Passed
+            Pass: loop-vectorize
+            Name: Vectorized
+            DebugLoc: { File: stencil.c, Line: 1, Column: 1 }
+            """))
+
+        class Result:
+            stderr = "stencil.c:1:1: remark: inlined [-Rpass=inline]"
+
+        return Result()
+
+    with patch(
+        "perflens.compiler_feedback.clang_parser.shutil.which",
+        return_value="/usr/bin/clang",
+    ), patch(
+        "perflens.compiler_feedback.clang_parser.subprocess.run",
+        side_effect=fake_run,
+    ):
+        report = ClangFeedbackParser().compile_and_parse(source)
+
+    assert len(report.vectorized_loops) == 1
+    assert report.vectorized_loops[0].line == 1
+    assert len(report.remarks) == 1
 
 
 # ══════════════════════════════════════════════════════════════════════════════

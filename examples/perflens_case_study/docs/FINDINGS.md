@@ -101,18 +101,20 @@ Passing an unsupported compiler value (`--compiler xyz`) did not produce an expl
 
 ---
 
-### FINDING-P4-04 — Clang feedback could not be evaluated in the case-study environment
+### FINDING-P4-04 — Clang vectorization feedback is limited by toolchain output
 
-**Status:** Environment limitation
+**Status:** Clang parser compatibility correction implemented and test-verified; live vectorization feedback remains limited by compiler/toolchain output
 
-A usable Clang installation was not available on the tested HPC environment. The system-installed `clang` command was unavailable, while the discovered MATLAB-bundled Clang could not execute because of incompatible system C++ runtime libraries.
+Intel oneAPI LLVM Clang 2025.0.4 is available and executable in the case-study environment. PerfLens previously consumed textual Clang `-Rpass` diagnostics; it now also supports Clang optimization-record YAML as a fallback when vectorization feedback is absent from stderr. The existing textual parser is preserved, and YAML is used only when there are no vectorized or missed-vectorization remarks.
 
-Therefore, Clang-specific PerfLens behavior was not classified as PASS or FAIL.
+A focused `compile_and_parse()` regression test verifies that an inline-only textual result falls back to YAML. Focused tests passed: 32. Full test suite validation passed: 312 passed, 5 skipped.
+
+The live case-study compilation with `-Rpass=loop-vectorize`, `-Rpass-missed=loop-vectorize`, and `-Rpass-analysis=loop-vectorize` produced no textual vectorization remarks for `examples/perflens_case_study/src/kernels.c`. Clang generated an optimization-record YAML file, but it contained no `Pass: loop-vectorize` records for this source. The live result therefore remains Vectorized=0, Missed vectorization=0, and Aliasing failures=0. Clang vectorization detection is not fully verified from the live case study.
 
 **Evidence:**
 - `P4-12-clang-availability.txt`
 
-**Classification:** HPC/environment limitation, not a PerfLens finding.
+**Classification:** PerfLens parser compatibility correction verified; remaining HPC/compiler-toolchain limitation.
 
 
 ## Phase 3 — Static Scanner Findings
