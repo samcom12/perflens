@@ -457,7 +457,7 @@ class DivisionHoistRule(TransformRule):
         patches: list[Patch] = []
         source = ctx.source
 
-        for loop_m in _DIV_LOOP.finditer(source):
+        for loop_m in reversed(list(_DIV_LOOP.finditer(source))):
             raw_loop_body = loop_m.group("loop")
             # Strip comments and string/char literals so we never treat tokens
             # inside `/* I/O */` or "a/b" as real division divisors.

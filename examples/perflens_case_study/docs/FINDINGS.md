@@ -121,14 +121,25 @@ The live case-study compilation with `-Rpass=loop-vectorize`, `-Rpass-missed=loo
 
 ### FINDING-P3-01 — C/C++ division findings can be associated with the wrong loop
 
-**Status:** Confirmed
+**Status:** Corrected and verified
 
-The regex-based C/C++ scanner can associate a division operation with an earlier loop when multiple loops/functions occur in the same source file. Isolated tests detected the division correctly, while multi-loop/multi-function tests produced incorrect line association.
+The regex-based C/C++ scanner previously could associate a division operation with an earlier loop when multiple loops/functions occurred in the same source file. The original P3-03, P3-05, and P3-10 tests reproduced the incorrect line association.
+
+The root cause was the division-loop regex in `perflens/scanner/clang_scanner.py`. Its loop-header pattern could consume across loop braces, allowing a match to begin at an earlier loop and include a later division loop.
+
+The scanner regex was corrected so that a division-loop match cannot cross loop braces. A regression test was added covering multiple functions/loops and verifying that the later division is associated with its actual loop.
+
+Verification:
+- Scanner tests: 30 passed
+- Full test suite: 314 passed, 5 skipped
+- Case-study `kernels.c`: division finding now reports the CASE-05 loop at line 68
+- The previous incorrect division finding at line 15 is no longer reported
 
 **Evidence:**
 - P3-03
 - P3-05
 - P3-10
+- Multi-function division regression test
 
 **Classification:** PerfLens static-scanner bug / incorrect finding association.
 

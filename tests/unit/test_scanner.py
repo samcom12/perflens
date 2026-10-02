@@ -101,6 +101,32 @@ def test_c_division_in_loop(tmp_path):
     assert FindingKind.DIVISION_IN_LOOP in kinds
 
 
+def test_c_division_fallback_reports_later_loop_line(tmp_path):
+    from perflens.scanner.clang_scanner import ClangScanner
+
+    source = textwrap.dedent("""\
+        void first(double *a, int n) {
+            for (int i = 0; i < n; ++i) {
+                a[i] = a[i] + 1.0;
+            }
+        }
+
+        void second(double *b, double divisor, int n) {
+            for (int i = 0; i < n; ++i) {
+                b[i] = b[i] / divisor;
+            }
+        }
+    """)
+    findings = ClangScanner()._regex_scan(tmp_path / "multi.c", source)
+
+    divisions = [
+        finding for finding in findings
+        if finding.kind == FindingKind.DIVISION_IN_LOOP
+    ]
+    assert len(divisions) == 1
+    assert divisions[0].line == 8
+
+
 def test_c_clean_code_no_findings(tmp_path):
     src = textwrap.dedent("""\
         void add(double *a, const double *b, int n) {

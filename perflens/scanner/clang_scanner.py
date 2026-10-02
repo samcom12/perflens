@@ -34,7 +34,7 @@ except ImportError:
 _REGEX_PATTERNS: list[tuple[re.Pattern, FindingKind, Severity, str, str]] = [
     # Division inside loop body
     (
-        re.compile(r"for\s*\(.*\)\s*\{[^}]*(?<![/*])/(?![/*=])[^}]*\}", re.DOTALL),
+        re.compile(r"for\s*\([^{}]*\)\s*\{[^}]*(?<![/*])/(?![/*=])[^}]*\}", re.DOTALL),
         FindingKind.DIVISION_IN_LOOP,
         Severity.MEDIUM,
         "Division operation found inside loop body — consider hoisting the reciprocal",

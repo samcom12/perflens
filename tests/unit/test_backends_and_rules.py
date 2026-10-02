@@ -287,6 +287,34 @@ class TestDivisionHoistRule:
         new_src, patches = result
         assert "inv_scale" in new_src or "* inv" in new_src
 
+    def test_reports_line_for_later_loop(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import DivisionHoistRule
+        from perflens.scanner.models import Finding, FindingKind, Severity
+
+        source = textwrap.dedent("""\
+            void first(double *a, double scale, int n) {
+                for (int i = 0; i < n; i++) {
+                    a[i] = a[i] / scale;
+                }
+            }
+
+            void second(double *b, double factor, int n) {
+                for (int i = 0; i < n; i++) {
+                    b[i] = b[i] / factor;
+                }
+            }
+        """)
+        finding = Finding(Path("x.c"), 9, 0, FindingKind.DIVISION_IN_LOOP,
+                          Severity.MEDIUM, "div", "hoist")
+        result = DivisionHoistRule().apply(
+            _make_ctx(source, "c", hw_a100, [finding])
+        )
+
+        assert result is not None
+        _, patches = result
+        assert patches[0].start_line == 8
+        assert "line 8" in patches[0].description
+
 
 class TestMPINonBlockingRule:
     def test_applies_on_blocking_calls(self, hw_a100):
