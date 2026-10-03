@@ -56,12 +56,12 @@ _REGEX_PATTERNS: list[tuple[re.Pattern, FindingKind, Severity, str, str]] = [
         "I/O call inside compute loop — serialises execution",
         "Accumulate output and write outside the loop, or use buffered I/O",
     ),
-    # MPI_Send/Recv without non-blocking alternatives
+    # Blocking MPI calls without non-blocking alternatives
     (
-        re.compile(r"\bMPI_(Send|Recv)\s*\("),
+        re.compile(r"\bMPI_(Send|Recv|Bcast|Reduce|Barrier)\s*\("),
         FindingKind.MPI_SYNCHRONOUS_HOTSPOT,
         Severity.MEDIUM,
-        "Synchronous MPI_Send/Recv — may block and waste compute cycles",
+        "Synchronous MPI call — may block and waste compute cycles",
         "Switch to MPI_Isend/Irecv with MPI_Waitall to overlap communication and computation",
     ),
     # Missing #pragma omp simd on inner loop

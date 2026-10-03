@@ -211,15 +211,20 @@ The Fortran scanner previously reported `WRITE`/`PRINT` statements as `io in loo
 
 ### FINDING-P3-05 — Regex fallback has narrower MPI coverage than the AST path
 
-**Status:** Confirmed limitation
+**Status:** Corrected and verified
 
-The regex fallback explicitly recognizes `MPI_Send` and `MPI_Recv`, while the broader scanner implementation supports additional MPI blocking collectives such as `MPI_Bcast`, `MPI_Reduce`, and `MPI_Barrier`. Therefore, behavior under regex fallback is not equivalent to the full AST-supported MPI coverage.
+The regex fallback previously recognized only `MPI_Send` and `MPI_Recv`, while the broader scanner implementation supports additional MPI blocking collectives such as `MPI_Bcast`, `MPI_Reduce`, and `MPI_Barrier`. The regex fallback was expanded to recognize the same blocking MPI collective set.
 
 **Evidence:**
 - P3-23
 - P3-25
 
-**Classification:** PerfLens static-scanner fallback coverage limitation.
+**Verification:**
+- `test_c_mpi_regex_detects_blocking_collectives`: 1 passed
+- `tests/unit/test_scanner.py`: 34 passed
+- Full test suite: 318 passed, 5 skipped
+
+**Classification:** PerfLens static-scanner fallback coverage bug; corrected.
 
 ---
 

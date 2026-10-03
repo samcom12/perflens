@@ -116,6 +116,27 @@ def test_c_mpi_blocking(tmp_path):
     assert FindingKind.MPI_SYNCHRONOUS_HOTSPOT in kinds
 
 
+def test_c_mpi_regex_detects_blocking_collectives(tmp_path):
+    from perflens.scanner.clang_scanner import ClangScanner
+
+    source = textwrap.dedent("""\
+        void communicate(void) {
+            MPI_Send(buf, n, MPI_DOUBLE, rank, 0, MPI_COMM_WORLD);
+            MPI_Recv(buf, n, MPI_DOUBLE, rank, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Bcast(buf, n, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+            MPI_Reduce(buf, result, n, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+            MPI_Barrier(MPI_COMM_WORLD);
+        }
+    """)
+    findings = ClangScanner()._regex_scan(tmp_path / "mpi.c", source)
+
+    mpi_findings = [
+        finding for finding in findings
+        if finding.kind == FindingKind.MPI_SYNCHRONOUS_HOTSPOT
+    ]
+    assert len(mpi_findings) == 5
+
+
 def test_c_mpi_regex_ignores_comments_and_strings(tmp_path):
     from perflens.scanner.clang_scanner import ClangScanner
 
