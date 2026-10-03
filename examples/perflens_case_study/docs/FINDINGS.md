@@ -168,16 +168,23 @@ Verification:
 
 ### FINDING-P3-03 — Regex fallback produces MPI false positives in comments and strings
 
-**Status:** Confirmed
+**Status:** Corrected and verified
 
-The regex fallback identifies MPI calls lexically without distinguishing source code from comments or string literals. MPI-like text in comments and strings was therefore reported as synchronous MPI activity.
+The regex fallback previously identified MPI calls lexically without distinguishing source code from comments or string literals. A lexical masking step was added before regex matching so comments and string/character literals are ignored while source positions and newlines are preserved.
 
 **Evidence:**
 - P3-30
 - P3-31
 - P3-32
 
-**Classification:** PerfLens static-scanner false-positive bug in regex fallback.
+**Verification:**
+- `tests/unit/test_scanner.py`: 32 passed
+- Full test suite: 316 passed, 5 skipped
+- P3-30 CLI verification: no optimization opportunities found
+- P3-31 CLI verification: no optimization opportunities found
+- P3-32 CLI verification: no optimization opportunities found
+
+**Classification:** PerfLens static-scanner false-positive bug in regex fallback; corrected.
 
 ---
 
