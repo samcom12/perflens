@@ -106,6 +106,76 @@ class _LoopContext:
     nest_stack: list[int] = field(default_factory=list)  # line numbers of enclosing loops
 
 
+def _mask_c_lexical_regions(source: str) -> str:
+    """Mask C/C++ comments and string/character literals while preserving positions."""
+    out = list(source)
+    i = 0
+    n = len(source)
+    state = "code"
+
+    while i < n:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+
+        if state == "code":
+            if ch == "/" and nxt == "/":
+                out[i] = out[i + 1] = " "
+                i += 2
+                state = "line_comment"
+            elif ch == "/" and nxt == "*":
+                out[i] = out[i + 1] = " "
+                i += 2
+                state = "block_comment"
+            elif ch == '"':
+                out[i] = " "
+                i += 1
+                state = "string"
+            elif ch == "'":
+                out[i] = " "
+                i += 1
+                state = "char"
+            else:
+                i += 1
+
+        elif state == "line_comment":
+            if ch == "\n":
+                state = "code"
+            else:
+                out[i] = " "
+            i += 1
+
+        elif state == "block_comment":
+            if ch == "*" and nxt == "/":
+                out[i] = out[i + 1] = " "
+                i += 2
+                state = "code"
+            else:
+                if ch != "\n":
+                    out[i] = " "
+                i += 1
+
+        elif state in {"string", "char"}:
+            if ch == "\\":
+                out[i] = " "
+                i += 1
+                if i < n:
+                    if source[i] != "\n":
+                        out[i] = " "
+                    i += 1
+            elif (state == "string" and ch == '"' and source[i - 1] != "\\") or (
+                state == "char" and ch == "'"
+            ):
+                out[i] = " "
+                i += 1
+                state = "code"
+            else:
+                if ch != "\n":
+                    out[i] = " "
+                i += 1
+
+    return "".join(out)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Main scanner class
 # ──────────────────────────────────────────────────────────────────────────────
@@ -152,9 +222,10 @@ class ClangScanner:
     def _regex_scan(self, path: Path, source: str) -> list[Finding]:
         findings: list[Finding] = []
         lines = source.splitlines()
+        masked_source = _mask_c_lexical_regions(source)
 
         for pattern, kind, severity, message, suggestion in _REGEX_PATTERNS:
-            for m in pattern.finditer(source):
+            for m in pattern.finditer(masked_source):
                 line_no = source[: m.start()].count("\n") + 1
                 col_no  = m.start() - source.rfind("\n", 0, m.start())
                 ctx = lines[max(0, line_no - 2) : line_no + 2]

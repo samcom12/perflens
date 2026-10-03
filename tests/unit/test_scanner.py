@@ -116,6 +116,26 @@ def test_c_mpi_blocking(tmp_path):
     assert FindingKind.MPI_SYNCHRONOUS_HOTSPOT in kinds
 
 
+def test_c_mpi_regex_ignores_comments_and_strings(tmp_path):
+    from perflens.scanner.clang_scanner import ClangScanner
+
+    source = textwrap.dedent(r"""\
+        void test(void) {
+            /* MPI_Send(buf, n, MPI_DOUBLE, rank, 0, MPI_COMM_WORLD); */
+            const char *normal = "MPI_Send(buf, n, MPI_DOUBLE, rank, 0, MPI_COMM_WORLD);";
+            const char *escaped = "text \\" MPI_Send(buf, n, MPI_DOUBLE, rank, 0, MPI_COMM_WORLD);";
+        }
+    """)
+
+    findings = ClangScanner()._regex_scan(tmp_path / "mpi_lexical.c", source)
+
+    mpi_findings = [
+        finding for finding in findings
+        if finding.kind == FindingKind.MPI_SYNCHRONOUS_HOTSPOT
+    ]
+    assert mpi_findings == []
+
+
 def test_c_division_in_loop(tmp_path):
     f = _write_tmp(tmp_path, "div.c", C_DIVISION_IN_LOOP)
     findings = scan_file(f, language="c")
