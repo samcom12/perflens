@@ -190,17 +190,22 @@ The regex fallback previously identified MPI calls lexically without distinguish
 
 ### FINDING-P3-04 — Fortran WRITE/PRINT rule is broader than actual loop detection
 
-**Status:** Confirmed limitation
+**Status:** Corrected and verified
 
-The Fortran scanner labels `WRITE`/`PRINT` statements as `io in loop` even when they occur outside a `DO` loop. The implementation checks whether a line contains `WRITE`/`PRINT`; loop depth affects the message/severity but does not gate the finding itself.
-
-The tested fixtures showed standalone `PRINT` statements after the loop being reported as `io in loop`.
+The Fortran scanner previously reported `WRITE`/`PRINT` statements as `io in loop` even when they occurred outside a `DO` loop. The scanner now gates the `IO_IN_LOOP` finding on the current `DO` nesting depth, so standalone `WRITE`/`PRINT` statements are excluded while statements inside `DO` loops continue to be reported.
 
 **Evidence:**
 - P3-LANG-02
 - P3-LANG-03
 
-**Classification:** PerfLens static-scanner heuristic/false-positive limitation.
+**Verification:**
+- New regression test for in-loop `PRINT`/`WRITE` and standalone `PRINT`: passed
+- `tests/unit/test_scanner.py`: 33 passed
+- Full test suite: 317 passed, 5 skipped
+- P3-LANG-02 CLI verification: no optimization opportunities found
+- P3-LANG-03 CLI verification: no optimization opportunities found
+
+**Classification:** PerfLens static-scanner false-positive bug in Fortran `IO_IN_LOOP` detection; corrected.
 
 ---
 

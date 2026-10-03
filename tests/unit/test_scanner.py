@@ -335,6 +335,30 @@ def test_fortran_mpi_blocking(tmp_path):
     assert FindingKind.MPI_SYNCHRONOUS_HOTSPOT in kinds
 
 
+def test_fortran_io_in_loop_excludes_standalone_print(tmp_path):
+    source = textwrap.dedent("""\
+        SUBROUTINE output(n)
+          INTEGER :: n, i
+          DO i = 1, n
+            PRINT *, i
+          END DO
+          DO i = 1, n
+            WRITE(*,*) i
+          END DO
+          PRINT *, n
+        END SUBROUTINE
+    """)
+    f = _write_tmp(tmp_path, "io.f90", source)
+    findings = scan_file(f, language="fortran")
+
+    io_findings = [
+        finding for finding in findings
+        if finding.kind == FindingKind.IO_IN_LOOP
+    ]
+    assert len(io_findings) == 2
+    assert {finding.line for finding in io_findings} == {4, 7}
+
+
 def test_fortran_missing_implicit_none(tmp_path):
     f = _write_tmp(tmp_path, "legacy.f90", F_MISSING_IMPLICIT_NONE)
     findings = scan_file(f, language="fortran")

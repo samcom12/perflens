@@ -132,6 +132,8 @@ class FortranScanner:
 
             for pattern, kind, severity, message, suggestion in _LINE_PATTERNS:
                 if pattern.search(line):
+                    if kind == FindingKind.IO_IN_LOOP and do_depth == 0:
+                        continue
                     # Elevate severity when we're inside a DO loop
                     eff_severity = (
                         Severity.HIGH if in_do_loop and severity == Severity.MEDIUM else severity
