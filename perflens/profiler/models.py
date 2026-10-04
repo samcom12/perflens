@@ -97,8 +97,8 @@ class ProfileData:
                 f"{h.cpu_time_ms:.1f}",
                 f"{h.cpi:.2f}"       if h.cpi       is not None else "—",
                 f"{h.llc_miss_rate*100:.1f}%" if h.llc_miss_rate is not None else "—",
-                f"{h.mem_bound_pct:.1f}%"     if h.mem_bound_pct is not None else "—",
-                f"{h.vectorization_pct:.1f}%" if h.vectorization_pct is not None else "—",
+                f"{h.mem_bound_pct * 100:.1f}%"     if h.mem_bound_pct is not None else "—",
+                f"{h.vectorization_pct * 100:.1f}%" if h.vectorization_pct is not None else "—",
                 f"{h.arithmetic_intensity:.2f}" if h.arithmetic_intensity is not None else "—",
             )
         console.print(table)

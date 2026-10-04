@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import textwrap
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 from perflens.profiler.dispatcher import parse_profile
 from perflens.profiler.models import Hotspot, ProfileData
@@ -200,6 +202,20 @@ def test_profiledata_to_dict():
     json.dumps(d)   # must be serialisable
     assert d["total_time_ms"] == 5000.0
     assert len(d["hotspots"]) == 1
+
+
+def test_profiledata_summary_displays_percentage_metrics():
+    pd = ProfileData(
+        tool="vtune", source=None, report_path=None, total_time_ms=1000.0,
+        hotspots=[Hotspot("flux", "solver", None, 1, 100.0, 1000.0,
+                          None, None, 0.2, None, 0.8, None, None)],
+    )
+    output = io.StringIO()
+    pd.print_summary(Console(file=output, width=120))
+
+    captured = output.getvalue()
+    assert "20.0%" in captured
+    assert "80.0%" in captured
 
 
 def test_hotspot_to_dict():

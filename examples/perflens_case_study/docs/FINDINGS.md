@@ -241,18 +241,27 @@ The C/C++ scanner reported that `libclang` was unavailable and therefore used it
 
 ### FINDING-P5-01 — Normalized profiler percentages are displayed incorrectly
 
-**Status:** Confirmed
+**Status:** Corrected and verified
 
-The VTune parser normalizes percentage metrics such as memory-bound and vectorization values from percentages to fractions in the range 0–1. The profiler terminal display correctly converts LLC miss rate back to percentage form, but displays `mem_bound_pct` and `vectorization_pct` directly with a `%` suffix.
+The VTune parser normalizes percentage metrics such as memory-bound and vectorization values from percentages to fractions in the range 0–1. The profiler terminal display correctly converts LLC miss rate back to percentage form, but previously displayed `mem_bound_pct` and `vectorization_pct` directly with a `%` suffix.
 
-As a result, values such as 20% memory-bound and 80% vectorization are displayed as `0.2%` and `0.8%` instead of `20.0%` and `80.0%`.
+As a result, values such as 20% memory-bound and 80% vectorization were displayed as `0.2%` and `0.8%` instead of `20.0%` and `80.0%`.
 
-The JSON export preserves the normalized values correctly; the defect is in terminal presentation.
+The JSON export preserves the normalized values correctly; the defect was limited to terminal presentation.
+
+The terminal formatter now converts the normalized memory-bound and vectorization values back to percentage form before display.
+
+A regression test was added to verify that normalized values `0.2` and `0.8` are displayed as `20.0%` and `80.0%`.
 
 **Evidence:**
 - P5-01-vtune-csv.txt
 - P5-02-output-json.txt
 - P5-02-percentage-format-source.txt
+
+**Verification:**
+- `tests/unit/test_profiler.py::test_profiledata_summary_displays_percentage_metrics` — passed
+- `tests/unit/test_profiler.py` — 19 passed
+- Full test suite — 319 passed, 5 skipped
 
 **Classification:** PerfLens profiler presentation bug.
 
