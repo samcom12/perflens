@@ -111,6 +111,7 @@ class OptimizationEngine:
                 language=language,
                 hardware=self.hardware,
                 findings=findings,
+                profile_data=profile_data,
             )
             return [result]
 

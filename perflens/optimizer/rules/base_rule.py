@@ -9,6 +9,7 @@ from typing import Optional
 
 from perflens.hardware.models import HardwareProfile
 from perflens.optimizer.models import Patch, TransformKind
+from perflens.profiler.models import ProfileData
 from perflens.scanner.models import Finding
 
 
@@ -20,6 +21,7 @@ class RuleContext:
     path: Path
     hardware: HardwareProfile
     findings: list[Finding]
+    profile_data: Optional[ProfileData] = None
 
 
 class TransformRule(ABC):

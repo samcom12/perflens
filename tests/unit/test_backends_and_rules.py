@@ -651,3 +651,47 @@ def test_rule_engine_tokens_zero(hw_a100, tmp_path):
     engine = RuleEngine()
     result = engine.run(tmp_path / "t.c", C_PARALLEL_LOOP, "c", hw_a100, [])
     assert result.tokens_used == 0
+
+def test_optimization_engine_passes_profile_data_to_rules_backend(
+    tmp_path, monkeypatch
+):
+    from perflens.optimizer.engine import OptimizationEngine
+    from perflens.optimizer.models import TransformKind
+    from perflens.optimizer.rules.base_rule import TransformRule
+    from perflens.optimizer.rules import rule_engine
+    from perflens.profiler.models import ProfileData
+
+    source = tmp_path / "test.c"
+    source.write_text("void f(void) {}\n")
+
+    profile = ProfileData(
+        tool="vtune",
+        source=source,
+        report_path=None,
+        total_time_ms=10.0,
+    )
+    captured = []
+
+    class CaptureProfileRule(TransformRule):
+        @property
+        def name(self):
+            return "capture_profile"
+
+        @property
+        def transform_kind(self):
+            return TransformKind.GENERAL
+
+        def applies(self, ctx):
+            captured.append(ctx.profile_data)
+            return False
+
+        def apply(self, ctx):
+            return None
+
+    monkeypatch.setattr(rule_engine, "_load_all_rules", lambda: [CaptureProfileRule()])
+
+    engine = OptimizationEngine(hw_profile="a100", backend="rules")
+    engine.optimize(source, profile_data=profile, findings=[])
+
+    assert len(captured) == 1
+    assert captured[0] is profile

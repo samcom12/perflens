@@ -299,13 +299,15 @@ The original case-study run on an Intel Xeon Gold 6240R (Cascade Lake) node sele
 **Classification:** Corrected PerfLens hardware coverage gap.
 
 ### FINDING-P7-01 — Rule-based optimization backend ignores profiler data
-**Status:** Confirmed
+**Status:** Partially corrected — data-flow defect fixed; hotspot-aware prioritization remains unimplemented.
 
-The top-level optimization pipeline successfully parses profiler reports and passes `profile_data` into `OptimizationEngine.optimize()`. However, when the selected backend is `RuleEngineBackend`, the engine calls `run_rules()` without passing `profile_data`. The rule backend therefore cannot use profiler hotspots when selecting or prioritizing transformations.
+The rule-based backend previously failed to forward `profile_data`. PerfLens now passes the optional `ProfileData` through `OptimizationEngine`, `RuleEngineBackend`, `RuleEngine`, and `RuleContext`. A regression test verifies that the exact `ProfileData` instance supplied to `OptimizationEngine.optimize()` reaches a rule's `RuleContext`.
 
-The LLM path does pass `profile_data` into `build_optimization_prompt()`, so this limitation is specific to the rule-based optimization backend.
+Existing rules still do not use profiler hotspots to select or prioritize transformations; that behavior is not implemented by this correction.
 
-**Evidence:** `P7-04-profile.txt` and source inspection of `perflens/optimizer/engine.py`.
+**Verification:** `pytest -q tests/unit/test_backends_and_rules.py::test_optimization_engine_passes_profile_data_to_rules_backend` — 1 passed; `pytest -q tests/unit/test_backends_and_rules.py` — 54 passed. The case-study dry run reported 16 findings and 5 proposed `openmp_simd` patches; `src/heat.c` remained unchanged.
+
+**Evidence:** `P7-04-profile.txt`, source inspection, regression test, and case-study dry-run output.
 
 **Classification:** PerfLens optimization-planning integration limitation/bug.
 

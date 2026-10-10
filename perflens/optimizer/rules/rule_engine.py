@@ -19,6 +19,7 @@ from typing import Optional
 from perflens.optimizer.backends.base import BackendCapabilities, LLMBackend
 from perflens.optimizer.models import OptimizationResult, Patch
 from perflens.optimizer.rules.base_rule import RuleContext, TransformRule
+from perflens.profiler.models import ProfileData
 
 
 def _load_all_rules() -> list[TransformRule]:
@@ -84,6 +85,7 @@ class RuleEngine:
         language: str,
         hardware,          # HardwareProfile
         findings: list,    # list[Finding]
+        profile_data: Optional[ProfileData] = None,
     ) -> OptimizationResult:
         """Apply all applicable rules and return a single OptimizationResult."""
         ctx = RuleContext(
@@ -92,6 +94,7 @@ class RuleEngine:
             path=source_path,
             hardware=hardware,
             findings=findings,
+            profile_data=profile_data,
         )
 
         current_source = source_text
@@ -116,6 +119,7 @@ class RuleEngine:
                 path=source_path,
                 hardware=hardware,
                 findings=findings,
+                profile_data=profile_data,
             )
             try:
                 result = rule.apply(ctx_current)
@@ -213,6 +217,14 @@ class RuleEngineBackend(LLMBackend):
         language: str,
         hardware,
         findings: list,
+        profile_data: Optional[ProfileData] = None,
     ) -> OptimizationResult:
         engine = RuleEngine()
-        return engine.run(source_path, source_text, language, hardware, findings)
+        return engine.run(
+            source_path,
+            source_text,
+            language,
+            hardware,
+            findings,
+            profile_data=profile_data,
+        )
