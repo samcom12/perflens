@@ -21,7 +21,7 @@ def test_all_builtin_profiles_loadable(db):
 
 
 @pytest.mark.parametrize("profile_id", [
-    "a100", "h100", "v100", "intel_spr", "intel_icx",
+    "a100", "h100", "v100", "intel_spr", "intel_icx", "intel_clx",
     "amd_genoa", "amd_milan", "a64fx", "graviton3",
 ])
 def test_known_profiles_exist(db, profile_id):
@@ -98,6 +98,41 @@ def test_intel_spr_core_count(db):
 def test_intel_spr_avx512(db):
     hw = db.get("intel_spr")
     assert hw.simd.instruction_set == "AVX-512"
+
+
+# ── Intel Cascade Lake ───────────────────────────────────────────────────────
+
+def test_intel_clx_profile(db):
+    hw = db.get("intel_clx")
+    assert hw.name == "Intel Xeon Gold 6240R (Cascade Lake)"
+    assert hw.cores_per_socket == 24
+    assert hw.sockets == 2
+    assert hw.l3_mb == 36
+    assert hw.simd.instruction_set == "AVX-512"
+    assert hw.memory_bandwidth_gbs == 140.8
+    assert hw.memory_capacity_gb == 0
+
+
+def test_detect_intel_clx_cpu(monkeypatch):
+    from perflens.hardware import detector
+
+    monkeypatch.setattr(
+        detector,
+        "_read_cpuinfo",
+        lambda: "model name\t: Intel(R) Xeon(R) Gold 6240R CPU @ 2.40GHz\n",
+    )
+    assert detector._detect_cpu_profile() == "intel_clx"
+
+
+def test_detect_cascade_lake_cpu(monkeypatch):
+    from perflens.hardware import detector
+
+    monkeypatch.setattr(
+        detector,
+        "_read_cpuinfo",
+        lambda: "model name\t: Intel Xeon Cascade Lake processor\n",
+    )
+    assert detector._detect_cpu_profile() == "intel_clx"
 
 
 # ── A64FX (Fugaku) ─────────────────────────────────────────────────────────────

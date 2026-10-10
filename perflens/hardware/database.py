@@ -170,6 +170,19 @@ def _build_profiles() -> dict[str, HardwareProfile]:
         recommended_fflags=["-O3", "-march=icelake-server", "-fopenmp", "-ffast-math"],
     )
 
+    # ── Intel Cascade Lake ───────────────────────────────────────────────────
+    profiles["intel_clx"] = HardwareProfile(
+        profile_id="intel_clx",
+        name="Intel Xeon Gold 6240R (Cascade Lake)",
+        vendor="intel",
+        arch="cascade_lake",
+        cores_per_socket=24, sockets=2, threads_per_core=2,
+        base_freq_ghz=2.4, boost_freq_ghz=4.0,
+        l1d_kb=32, l1i_kb=32, l2_kb=1024, l3_mb=36,
+        memory_bandwidth_gbs=140.8, memory_type="DDR4-2933", numa_domains=2,
+        simd=SIMDCapability("AVX-512", 512, fma_supported=True, double_throughput=2.0),
+    )
+
     # ── AMD EPYC Genoa ────────────────────────────────────────────────────────
     profiles["amd_genoa"] = HardwareProfile(
         profile_id="amd_genoa",

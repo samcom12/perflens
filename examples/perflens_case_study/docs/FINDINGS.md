@@ -280,15 +280,15 @@ VTune and HPCToolkit report parsing was still tested using controlled CSV/XML re
 
 ### Phase 6 — Hardware Detection Limitation
 
-### FINDING-P6-01 — Cascade Lake CPUs fall back to an inaccurate Ice Lake hardware profile
+### FINDING-P6-01 — Cascade Lake CPU hardware profile detection
 
-**Status:** Confirmed
+**Status:** Corrected and verified
 
-The case-study was executed on a Rudra compute node with an Intel Xeon Gold 6240R CPU (Cascade Lake), identified independently using `lscpu` and `/proc/cpuinfo`.
+The original case-study run on an Intel Xeon Gold 6240R (Cascade Lake) node selected the `intel_icx` Ice Lake profile because Cascade Lake was not represented in the hardware database.
 
-`perflens hw detect` selected the `intel_icx` profile, representing an Intel Xeon Ice Lake 8352Y. The selected profile reports different CPU topology and hardware characteristics, including 64 cores, 48 MB L3 cache, 512 GB DDR4-3200 memory, and Ice Lake-specific compiler flags, whereas the actual node has 48 CPUs, 2 sockets × 24 cores, approximately 36.6 MB L3 cache, and a Xeon Gold 6240R CPU.
+**Correction:** Added the `intel_clx` hardware profile and CPU detection for the Xeon Gold 6240R / Cascade Lake. The profile represents 2 sockets × 24 cores, AVX-512, 36 MB L3 cache, DDR4-2933, and 140.8 GB/s memory bandwidth. Memory capacity and peak CPU FLOP/s remain unspecified rather than being guessed.
 
-Source inspection confirms that this behavior is intentional: when no known CPU model matches, the detector falls back to `intel_icx`.
+**Verification:** `perflens hw detect` now selects `Intel Xeon Gold 6240R (Cascade Lake) (intel_clx)`. Hardware tests: 30 passed. Full test suite: 323 passed, 5 skipped.
 
 **Evidence:**
 
@@ -296,7 +296,7 @@ Source inspection confirms that this behavior is intentional: when no known CPU 
 - P6-02-hardware-profile-list.txt
 - P6-06-fallback-implementation.txt
 
-**Classification:** PerfLens hardware coverage limitation. Unsupported Cascade Lake hardware is modeled using an inaccurate Ice Lake baseline profile.
+**Classification:** Corrected PerfLens hardware coverage gap.
 
 ### FINDING-P7-01 — Rule-based optimization backend ignores profiler data
 **Status:** Confirmed

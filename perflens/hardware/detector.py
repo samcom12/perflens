@@ -63,6 +63,8 @@ def _detect_cpu_profile() -> Optional[str]:
         return "a64fx"
     if re.search(r"(8480|8462|8468|sapphire)", model_line):
         return "intel_spr"
+    if re.search(r"(6240r|cascade lake|cascadelake)", model_line):
+        return "intel_clx"
     if re.search(r"(8352|8360|8358|ice lake|icelake)", model_line):
         return "intel_icx"
     if re.search(r"(9654|9534|9454|epyc 9)", model_line):
