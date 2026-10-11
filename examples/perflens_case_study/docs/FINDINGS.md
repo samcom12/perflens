@@ -326,13 +326,19 @@ On the HPC environment, Clang needed GCC's include directory (`/usr/lib/gcc/x86_
 
 Classification: PerfLens rule-optimizer correctness/safety issue.
 ### FINDING-P8-01 — OpenMPSIMDRule annotates outer loops and can create invalid SIMD nesting
-Status: Confirmed
+Status: Resolved; verified by focused tests and GCC syntax checks
 
-Direct execution of `OpenMPSIMDRule` on the case-study heat kernel generated five `openmp_simd` patches at L8, L9, L23, L25 and L48. The rule is documented as targeting inner loops, but its `_INNER_LOOP` pattern matches multiple indented loops, including outer loops.
+The original implementation could annotate outer loops and generate invalid nested OpenMP SIMD regions. The rule now uses Clang AST loop discovery to select innermost loops and avoids adding SIMD directives when an existing SIMD directive is detected. It also declines safely when AST analysis is unavailable or source diagnostics prevent reliable analysis.
 
-The generated transformation was previously validated through the full pipeline and failed GCC compilation because OpenMP constructs were illegally nested inside a SIMD region.
+Verification on the current implementation:
+- Focused `OpenMPSIMDRule` tests: 8 passed.
+- Complete `tests/unit/test_backends_and_rules.py` module: 60 passed.
+- GCC OpenMP syntax checks passed for both the original case-study `heat.c` and the generated transformed source.
+- The current transformation generates five SIMD directives at original source lines 9, 25, 56, 99 and 104.
 
-Evidence:
+These checks establish that the tested loop-selection behavior and generated source pass the current regression and syntax checks; syntax validation alone does not prove that every selected loop will benefit from SIMD vectorization.
+
+Historical failure evidence:
 - `~/perflens_work/benchmark_results/phase8_rule_optimizer/P8-01-openmp-simd-case-study.txt`
 - `~/perflens_work/benchmark_results/phase7_optimization_planning/P7-10-validator-detail.txt`
 
