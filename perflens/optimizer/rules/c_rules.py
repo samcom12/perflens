@@ -15,6 +15,13 @@ import re
 from pathlib import Path
 from typing import Optional
 
+try:
+    import clang.cindex as cx
+    _CLANG_AVAILABLE = True
+except Exception:
+    cx = None
+    _CLANG_AVAILABLE = False
+
 from perflens.optimizer.models import Patch, TransformKind
 from perflens.optimizer.rules.base_rule import RuleContext, TransformRule
 from perflens.scanner.models import FindingKind
@@ -200,18 +207,96 @@ class OpenMPParallelRule(TransformRule):
 # Rule 2 — OpenMP SIMD on inner loops
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_OMP_SIMD_ALREADY = re.compile(r"#\s*pragma\s+omp\s+simd", re.MULTILINE)
-_GCC_IVDEP        = re.compile(r"#\s*pragma\s+GCC\s+ivdep", re.MULTILINE)
-
-_INNER_LOOP = re.compile(
-    r"^(?P<indent>\s{4,})for\s*\(\s*(?:int|long|size_t)\s+\w+\s*=",
-    re.MULTILINE,
+_SIMD_DIRECTIVE = re.compile(
+    r"^\s*#\s*pragma\s+(?:omp\b[^\n]*\bsimd\b|GCC\s+ivdep\b)",
+    re.IGNORECASE | re.MULTILINE,
 )
+
+
+def _innermost_for_loops(ctx: RuleContext) -> Optional[list[tuple[int, str]]]:
+    """Return safe innermost for-loop insertion points from an in-memory AST."""
+    if not _CLANG_AVAILABLE or cx is None:
+        return None
+
+    # Conservative safety policy: don't add SIMD directives to a file that
+    # already contains a SIMD-related directive. Its nesting scope may be
+    # difficult to establish reliably from source text alone.
+    if _SIMD_DIRECTIVE.search(ctx.source):
+        return []
+
+    try:
+        index = cx.Index.create()
+        language = "c++" if ctx.language == "cpp" else "c"
+        translation_unit = index.parse(
+            str(ctx.path),
+            args=[
+                "-x", language,
+                "-std=c++17" if language == "c++" else "-std=c11",
+                "-fopenmp",
+            ],
+            unsaved_files=[(str(ctx.path), ctx.source)],
+        )
+        error_severity = getattr(cx.Diagnostic, "Error", 3)
+        if any(diagnostic.severity >= error_severity for diagnostic in translation_unit.diagnostics):
+            return None
+    except Exception:
+        return None
+
+    try:
+        main_file = translation_unit.get_file(str(ctx.path))
+    except Exception:
+        return None
+
+    def is_main_file(cursor) -> bool:
+        location_file = cursor.location.file
+        return location_file is not None and (
+            location_file == main_file or location_file.name == main_file.name
+        )
+
+    loops: list[tuple[int, tuple[object, ...], bool]] = []
+
+    def collect(cursor, ancestors: tuple[object, ...] = ()) -> bool:
+        is_for = cursor.kind == cx.CursorKind.FOR_STMT and is_main_file(cursor)
+        child_ancestors = ancestors + (cursor,) if is_for else ancestors
+        has_for_descendant = False
+        for child in cursor.get_children():
+            has_for_descendant = collect(child, child_ancestors) or has_for_descendant
+        if is_for:
+            loops.append((cursor.extent.start.line, ancestors, has_for_descendant))
+        return is_for or has_for_descendant
+
+    collect(translation_unit.cursor)
+    if not loops:
+        return []
+
+    source_lines = ctx.source.splitlines()
+
+    def has_directive_before(line_number: int) -> bool:
+        index = line_number - 2
+        while index >= 0 and not source_lines[index].strip():
+            index -= 1
+        return index >= 0 and _SIMD_DIRECTIVE.match(source_lines[index]) is not None
+
+    existing_simd_lines = {
+        line_number for line_number, _, _ in loops
+        if has_directive_before(line_number)
+    }
+    eligible: list[tuple[int, str]] = []
+    for line_number, ancestors, has_for_descendant in loops:
+        if has_for_descendant:
+            continue
+        if line_number in existing_simd_lines:
+            continue
+        if any(ancestor.extent.start.line in existing_simd_lines for ancestor in ancestors):
+            continue
+        line = source_lines[line_number - 1]
+        eligible.append((line_number, line[: len(line) - len(line.lstrip())]))
+    return eligible
 
 
 class OpenMPSIMDRule(TransformRule):
     """
-    Insert ``#pragma omp simd`` before inner loops where SIMD is beneficial.
+    Insert ``#pragma omp simd`` before innermost loops where SIMD is beneficial.
     Requires AVX2 / AVX-512 / SVE hardware.
     """
 
@@ -230,38 +315,27 @@ class OpenMPSIMDRule(TransformRule):
             return False
         if not ctx.hardware.simd:
             return False
-        if _OMP_SIMD_ALREADY.search(ctx.source) or _GCC_IVDEP.search(ctx.source):
-            return False
-        # Need scanner finding or inner loop pattern
-        has_simd_finding = any(
-            f.kind == FindingKind.MISSING_SIMD_PRAGMA for f in ctx.findings
-        )
-        return has_simd_finding or bool(_INNER_LOOP.search(ctx.source))
+        return bool(_innermost_for_loops(ctx))
 
     def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
+        loops = _innermost_for_loops(ctx)
+        if loops is None:
+            return None
+
         patches: list[Patch] = []
         simd_w = ctx.hardware.simd.vector_width_bits if ctx.hardware.simd else 256
         lines  = ctx.source.splitlines(keepends=True)
-        offset = 0
 
-        for m in _INNER_LOOP.finditer(ctx.source):
-            lineno = _line_of(ctx.source, m)
-            indent = m.group("indent")
+        candidates = loops[:5]
+        for lineno, indent in candidates:
+            loop_line = lines[lineno - 1].rstrip("\r\n")
             insert = f"{indent}#pragma omp simd"
-
-            idx = lineno - 1 + offset
-            prev = lines[idx - 1].strip() if idx > 0 else ""
-            if "pragma" in prev:
-                continue
-
-            lines.insert(idx, insert + "\n")
-            offset += 1
 
             patches.append(Patch(
                 transform_kind=TransformKind.OPENMP_SIMD,
                 description=f"Add #pragma omp simd at line {lineno}",
-                original_snippet=m.group(0).strip(),
-                optimized_snippet=insert + "\n" + m.group(0).strip(),
+                original_snippet=loop_line.strip(),
+                optimized_snippet=insert + "\n" + loop_line.strip(),
                 start_line=lineno, end_line=lineno,
                 rationale=(
                     f"Target SIMD: {ctx.hardware.simd.instruction_set if ctx.hardware.simd else 'SSE'} "
@@ -269,9 +343,8 @@ class OpenMPSIMDRule(TransformRule):
                 ),
                 expected_speedup=f"{simd_w // 64}–{simd_w // 32}×",
             ))
-            # Limit: only annotate first 5 inner loops to avoid noise
-            if len(patches) >= 5:
-                break
+        for lineno, indent in reversed(candidates):
+            lines.insert(lineno - 1, f"{indent}#pragma omp simd\n")
 
         if not patches:
             return None

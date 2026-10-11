@@ -312,18 +312,19 @@ Existing rules still do not use profiler hotspots to select or prioritize transf
 **Classification:** PerfLens optimization-planning integration limitation/bug.
 
 ### FINDING-P7-02 — Rule-based OpenMP SIMD transformation can generate uncompilable nested SIMD regions
-Status: Confirmed
+Status: Corrected for the case-study failure; broader SIMD safety remains unverified
 
-During non-dry-run optimization of the case-study `heat.c`, the rules backend generated five `openmp_simd` patches. Direct validation showed that the original source compiled successfully, while the generated patched source failed GCC compilation.
+The SIMD rule now uses Clang AST loop discovery to select innermost loops rather than relying on indentation-based regex matching. It conservatively declines to add SIMD directives when a SIMD-related directive is already present or when Clang cannot parse the source. Innermost-loop selection does not itself prove that a loop is free of loop-carried dependencies; semantic SIMD safety is not established by these checks.
 
-GCC reported that OpenMP constructs other than `#pragma omp ordered simd` may not be nested inside a SIMD region. The generated transformation therefore introduced invalid OpenMP nesting.
+Validation:
+- Focused rule tests: 60 passed after the test-fixture cleanup.
+- Full test suite: 330 passed, 5 skipped in the run before the final test-fixture correction; a post-correction full-suite run remains unverified.
+- GCC OpenMP syntax checks passed for both the original and generated `examples/perflens_case_study/src/heat.c`.
+- The generated case-study transformation inserted five SIMD directives at original lines 9, 25, 56, 99, and 104.
 
-Evidence:
-- `~/perflens_work/benchmark_results/phase7_optimization_planning/P7-10-non-dry-run.txt`
-- `~/perflens_work/benchmark_results/phase7_optimization_planning/P7-10-validator-detail.txt`
+On the HPC environment, Clang needed GCC's include directory (`/usr/lib/gcc/x86_64-redhat-linux/8/include`) supplied through `CPATH` to find `stddef.h`. Without suitable compiler headers, the rule declines the transformation rather than emitting patches.
 
-Classification: PerfLens rule-optimizer correctness/safety issue. The validator correctly rejected the invalid transformation, and the original case-study source remained unchanged.
-
+Classification: PerfLens rule-optimizer correctness/safety issue.
 ### FINDING-P8-01 — OpenMPSIMDRule annotates outer loops and can create invalid SIMD nesting
 Status: Confirmed
 

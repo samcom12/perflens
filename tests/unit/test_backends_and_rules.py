@@ -240,6 +240,115 @@ class TestOpenMPSIMDRule:
         new_src, patches = result
         assert "#pragma omp simd" in new_src
 
+    def test_only_inserts_before_innermost_nested_loop(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import OpenMPSIMDRule
+
+        source = textwrap.dedent("""\
+            void nested(double *a, int n, int m) {
+                for (int i = 0; i < n; ++i) {
+                    for (int j = 0; j < m; ++j) {
+                        a[i * m + j] = 1.0;
+                    }
+                }
+            }
+        """)
+        result = OpenMPSIMDRule().apply(_make_ctx(source, "c", hw_a100))
+
+        assert result is not None
+        new_src, patches = result
+        assert len(patches) == 1
+        assert new_src.count("#pragma omp simd") == 1
+        lines = new_src.splitlines()
+        inner_loop = lines.index("        for (int j = 0; j < m; ++j) {")
+        assert lines[inner_loop - 1].strip() == "#pragma omp simd"
+        original_inner_line = source.splitlines().index(
+            "        for (int j = 0; j < m; ++j) {"
+        ) + 1
+        assert patches[0].start_line == original_inner_line
+
+    def test_triple_nested_loop_only_gets_innermost_pragma(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import OpenMPSIMDRule
+
+        source = textwrap.dedent("""\
+            void nested(double *a, int n) {
+                for (int i = 0; i < n; ++i) {
+                    for (int j = 0; j < n; ++j) {
+                        for (int k = 0; k < n; ++k) {
+                            a[i] += j + k;
+                        }
+                    }
+                }
+            }
+        """)
+        result = OpenMPSIMDRule().apply(_make_ctx(source, "c", hw_a100))
+
+        assert result is not None
+        new_src, patches = result
+        assert len(patches) == 1
+        assert new_src.count("#pragma omp simd") == 1
+        lines = new_src.splitlines()
+        inner_loop = lines.index("            for (int k = 0; k < n; ++k) {")
+        assert lines[inner_loop - 1].strip() == "#pragma omp simd"
+        original_inner_line = source.splitlines().index(
+            "            for (int k = 0; k < n; ++k) {"
+        ) + 1
+        assert patches[0].start_line == original_inner_line
+
+    def test_does_not_duplicate_or_nest_existing_simd_directive(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import OpenMPSIMDRule
+
+        source = textwrap.dedent("""\
+            void nested(double *a, int n, int m) {
+                #pragma omp simd
+                for (int i = 0; i < n; ++i) {
+                    for (int j = 0; j < m; ++j) {
+                        a[i * m + j] = 1.0;
+                    }
+                }
+            }
+        """)
+        rule = OpenMPSIMDRule()
+        ctx = _make_ctx(source, "c", hw_a100)
+
+        assert not rule.applies(ctx)
+        assert rule.apply(ctx) is None
+
+    def test_declines_when_simd_directive_follows_source_line(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import OpenMPSIMDRule
+
+        source = textwrap.dedent("""\
+            int helper(void) { return 1; }
+            void nested(double *a, int n, int m) {
+                for (int i = 0; i < n; ++i) {
+                    #pragma omp simd
+                    for (int j = 0; j < m; ++j) {
+                        a[i * m + j] = 1.0;
+                    }
+                }
+            }
+        """)
+        rule = OpenMPSIMDRule()
+        ctx = _make_ctx(source, "c", hw_a100)
+
+        assert not rule.applies(ctx)
+        assert rule.apply(ctx) is None
+
+    def test_declines_invalid_source(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import OpenMPSIMDRule
+
+        source = "void broken( {\n    for (int i = 0; i < 4; ++i) {}\n"
+        assert OpenMPSIMDRule().apply(_make_ctx(source, "c", hw_a100)) is None
+
+    def test_declines_when_clang_unavailable(self, hw_a100, monkeypatch):
+        import perflens.optimizer.rules.c_rules as c_rules
+
+        monkeypatch.setattr(c_rules, "_CLANG_AVAILABLE", False)
+        ctx = _make_ctx(C_SIMD_INNER, "c", hw_a100)
+        rule = c_rules.OpenMPSIMDRule()
+
+        assert not rule.applies(ctx)
+        assert rule.apply(ctx) is None
+
 
 class TestOpenMPOffloadRule:
     def test_applies_gpu(self, hw_a100):
