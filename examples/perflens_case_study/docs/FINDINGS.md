@@ -364,11 +364,13 @@ Classification: PerfLens rule-optimizer correctness/safety issue.
 
 ### FINDING-P8-03 — MPINonBlockingRule places MPI_Waitall outside function scope
 
-**Status:** Confirmed
+**Status:** Resolved
 
 `MPINonBlockingRule` converts blocking `MPI_Send`/`MPI_Recv` calls to `MPI_Isend`/`MPI_Irecv` and generates `MPI_Request`/`MPI_Status` arrays inside the function. However, the generated `MPI_Waitall()` was placed after the function's closing brace.
 
-This leaves `req` and `stat` out of scope at the `MPI_Waitall()` call and makes the generated transformation unsafe.
+The transformation previously used file-wide brace searches, which could place declarations or `MPI_Waitall()` in the wrong function when additional functions followed the MPI calls. It now locates the function containing the MPI calls, limits the transformation to that function, and places the declarations and wait operation within its scope.
+
+**Verification:** All three `MPI_Waitall()` scope regression tests passed, all 7 `MPINonBlockingRule` tests passed, and all 64 tests in `tests/unit/test_backends_and_rules.py` passed. Independent MPI compilation remains unverified because `mpicc` is unavailable on the tested node.
 
 **Evidence:**
 - `~/perflens_work/benchmark_results/phase8_rule_optimizer/P8-13-mpi-nonblocking.txt`

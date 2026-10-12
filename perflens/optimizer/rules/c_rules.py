@@ -636,43 +636,202 @@ _MPI_RECV = re.compile(
 )
 
 
+def _matching_brace(source: str, opening: int) -> int:
+    """Return the matching closing brace, ignoring comments and literals."""
+    depth = 0
+    i = opening
+    state = "code"
+
+    while i < len(source):
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < len(source) else ""
+
+        if state == "code":
+            if ch == "/" and nxt == "/":
+                state = "line_comment"
+                i += 2
+                continue
+            if ch == "/" and nxt == "*":
+                state = "block_comment"
+                i += 2
+                continue
+            if ch == '"':
+                state = "string"
+            elif ch == "'":
+                state = "char"
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return i
+        elif state == "line_comment":
+            if ch == "\n":
+                state = "code"
+        elif state == "block_comment":
+            if ch == "*" and nxt == "/":
+                state = "code"
+                i += 2
+                continue
+        elif state in ("string", "char"):
+            if ch == "\\":
+                i += 2
+                continue
+            if (state == "string" and ch == '"') or (
+                state == "char" and ch == "'"
+            ):
+                state = "code"
+
+        i += 1
+
+    return -1
+
+
 def _make_nonblocking_c(source: str) -> tuple[str, int]:
-    """Convert MPI_Send/Recv pairs to Isend/Irecv + MPI_Waitall."""
-    request_idx = 0
-    requests    = []
-    new_source  = source
+    """Convert MPI_Send/Recv calls in one unambiguous function to non-blocking calls."""
+    calls = []
+    for pattern, old_name, new_name, remove_status in (
+        (_MPI_SEND, "MPI_Send(", "MPI_Isend(", False),
+        (_MPI_RECV, "MPI_Recv(", "MPI_Irecv(", True),
+    ):
+        calls.extend(
+            (match.start(), match.end(), match.group(1), old_name, new_name, remove_status)
+            for match in pattern.finditer(source)
+        )
 
-    # Replace MPI_Send
-    for m in _MPI_SEND.finditer(source):
-        req_var = f"req[{request_idx}]"
-        new_call = m.group(1).replace("MPI_Send(", "MPI_Isend(", 1)
-        # Insert request arg before the last close paren
-        new_call = re.sub(r"\)\s*;$", f", &{req_var});", new_call)
-        new_source = new_source.replace(m.group(1), new_call, 1)
-        requests.append(req_var)
-        request_idx += 1
+    if not calls:
+        return source, 0
 
-    for m in _MPI_RECV.finditer(source):
-        req_var = f"req[{request_idx}]"
-        new_call = m.group(1).replace("MPI_Recv(", "MPI_Irecv(", 1)
-        # Remove MPI_STATUS_IGNORE, insert request arg
-        new_call = re.sub(r",\s*MPI_STATUS_IGNORE", "", new_call)
-        new_call = re.sub(r"\)\s*;$", f", &{req_var});", new_call)
-        new_source = new_source.replace(m.group(1), new_call, 1)
-        requests.append(req_var)
-        request_idx += 1
+    first_call = min(calls, key=lambda item: item[0])[0]
 
-    if requests:
-        decl    = f"\n    MPI_Request req[{len(requests)}];\n    MPI_Status  stat[{len(requests)}];\n"
-        waitall = f"\n    MPI_Waitall({len(requests)}, req, stat);\n"
-        # Insert declaration right after the first opening brace of the function
-        new_source = re.sub(r"(\{)", r"\1" + decl, new_source, count=1)
-        # Append Waitall before the return or end of function
-        new_source = re.sub(r"(\n\s*return\b)", waitall + r"\1", new_source, count=1)
-        if "MPI_Waitall" not in new_source:
-            new_source = new_source.rstrip() + waitall + "\n"
+    # Find brace pairs and select the smallest enclosing scope that contains
+    # the first MPI call. Refuse ambiguous or multi-function transformations.
+    stack = []
+    enclosing = []
+    state = "code"
+    i = 0
+    while i < len(source):
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < len(source) else ""
+        if state == "code":
+            if ch == "/" and nxt == "/":
+                state = "line_comment"
+                i += 2
+                continue
+            if ch == "/" and nxt == "*":
+                state = "block_comment"
+                i += 2
+                continue
+            if ch == '"':
+                state = "string"
+            elif ch == "'":
+                state = "char"
+            elif ch == "{":
+                stack.append(i)
+            elif ch == "}":
+                if stack:
+                    opening = stack.pop()
+                    if opening < first_call < i:
+                        enclosing.append((opening, i))
+        elif state == "line_comment":
+            if ch == "\n":
+                state = "code"
+        elif state == "block_comment":
+            if ch == "*" and nxt == "/":
+                state = "code"
+                i += 2
+                continue
+        elif state in ("string", "char"):
+            if ch == "\\":
+                i += 2
+                continue
+            if (state == "string" and ch == '"') or (state == "char" and ch == "'"):
+                state = "code"
+        i += 1
 
-    return new_source, request_idx
+    if not enclosing:
+        return source, 0
+
+    # Find the nearest enclosing brace that looks like a function body,
+    # skipping nested control-flow blocks such as if/for/while.
+    signature_pattern = re.compile(
+        r"\b([A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:const\s*)?$"
+    )
+    control_words = {"if", "for", "while", "switch", "catch"}
+    function_scope = None
+
+    for candidate_opening, candidate_closing in sorted(
+        enclosing, key=lambda pair: pair[0], reverse=True
+    ):
+        prefix = source[:candidate_opening].rstrip()
+        match = signature_pattern.search(prefix)
+        if match and match.group(1) not in control_words:
+            function_scope = (candidate_opening, candidate_closing)
+            break
+
+    if function_scope is None:
+        return source, 0
+
+    opening, closing = function_scope
+    # Refuse partial transformations if calls span different function scopes.
+    if any(not (opening < item[0] < closing) for item in calls):
+        return source, 0
+
+    request_count = len(calls)
+    decl = (
+        f"\n    MPI_Request req[{request_count}];"
+        f"\n    MPI_Status  stat[{request_count}];\n"
+    )
+    waitall = f"\n    MPI_Waitall({request_count}, req, stat);\n"
+
+    # Replace by original offsets, right to left, so identical call text
+    # cannot redirect a replacement to a different occurrence.
+    new_source = source
+    for index, (start, end, call, old_name, new_name, remove_status) in enumerate(
+        sorted(calls, key=lambda item: item[0], reverse=True)
+    ):
+        new_call = call.replace(old_name, new_name, 1)
+        if remove_status:
+            new_call = re.sub(r",\s*MPI_STATUS_IGNORE", "", new_call)
+        new_call = re.sub(r"\)\s*;$", f", &req[{index}]);", new_call)
+        new_source = new_source[:start] + new_call + new_source[end:]
+
+    # Insert declarations and wait at safe positions in the selected function.
+    opening = source.find("{", opening, opening + 1)
+    if opening == -1:
+        return source, 0
+    new_opening = opening
+    closing = _matching_brace(new_source, new_opening)
+    if closing == -1:
+        return source, 0
+
+    new_source = new_source[:new_opening + 1] + decl + new_source[new_opening + 1:]
+    closing = _matching_brace(new_source, new_opening)
+    if closing == -1:
+        return source, 0
+
+    body_start = new_opening + 1
+    body = new_source[body_start:closing]
+    return_matches = list(re.finditer(r"\breturn\b", body))
+    return_lines = list(re.finditer(r"(?m)^([ \t]*)return\b", body))
+
+    # Fail closed if any return is not a standalone statement line.
+    # This avoids inserting waits into ambiguous control flow.
+    if len(return_matches) != len(return_lines):
+        return source, 0
+
+    # Wait before every explicit return, processing bottom-up so offsets
+    # remain valid. Preserve the indentation of each return statement.
+    for match in reversed(return_lines):
+        indent = match.group(1)
+        line_start = match.start()
+        insertion = f"{indent}MPI_Waitall({request_count}, req, stat);\n"
+        body = body[:line_start] + insertion + body[line_start:]
+
+    # Also wait on normal fall-through paths.
+    body = body.rstrip() + f"\n    MPI_Waitall({request_count}, req, stat);\n"
+    new_source = new_source[:body_start] + body + new_source[closing:]
+    return new_source, request_count
 
 
 class MPINonBlockingRule(TransformRule):

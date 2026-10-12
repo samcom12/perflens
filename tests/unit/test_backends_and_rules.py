@@ -444,6 +444,96 @@ class TestMPINonBlockingRule:
         assert "MPI_Irecv" in new_src
         assert "MPI_Waitall" in new_src
 
+    def test_waitall_stays_inside_function_without_return(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import MPINonBlockingRule
+
+        r = MPINonBlockingRule()
+        ctx = _make_ctx(C_MPI_BLOCKING, "c", hw_a100)
+        result = r.apply(ctx)
+
+        assert result is not None
+        new_src, _ = result
+        function_end = new_src.rfind("}")
+        waitall_pos = new_src.index("MPI_Waitall")
+        assert waitall_pos < function_end
+
+    def test_waitall_stays_in_mpi_function_with_multiple_functions(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import MPINonBlockingRule
+
+        source = textwrap.dedent("""\\
+            #include <mpi.h>
+            void exchange(double *buf, int n) {
+                MPI_Send(buf, n, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+                MPI_Recv(buf, n, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+            void unrelated(void) {
+                int x = 0;
+            }
+        """)
+
+        result = MPINonBlockingRule().apply(_make_ctx(source, "c", hw_a100))
+        assert result is not None
+        new_src, _ = result
+
+        exchange_start = new_src.index("void exchange")
+        exchange_end = new_src.index("\n}", exchange_start)
+        unrelated_start = new_src.index("void unrelated")
+        waitall_pos = new_src.index("MPI_Waitall")
+        declarations_pos = new_src.index("MPI_Request req")
+
+        assert exchange_start < declarations_pos < exchange_end
+        assert exchange_start < waitall_pos < exchange_end
+        assert waitall_pos < unrelated_start
+
+
+    def test_nested_if_keeps_declarations_and_waitall_in_function(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import MPINonBlockingRule
+
+        source = textwrap.dedent("""\\
+            #include <mpi.h>
+            void exchange(double *buf, int n) {
+                if (n > 0) {
+                    MPI_Send(buf, n, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+                }
+                MPI_Recv(buf, n, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            }
+        """)
+
+        result = MPINonBlockingRule().apply(_make_ctx(source, "c", hw_a100))
+        assert result is not None
+        new_src, _ = result
+
+        function_start = new_src.index("void exchange")
+        function_open = new_src.index("{", function_start)
+        function_close = new_src.rfind("}", function_open)
+        declarations_pos = new_src.index("MPI_Request req")
+        waitall_pos = new_src.index("MPI_Waitall")
+
+        assert function_open < declarations_pos < function_close
+        assert function_open < waitall_pos < function_close
+        assert new_src.count("MPI_Isend(") == 1
+        assert new_src.count("MPI_Irecv(") == 1
+
+    def test_repeated_identical_calls_are_both_replaced(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import MPINonBlockingRule
+
+        source = textwrap.dedent("""\\
+            #include <mpi.h>
+            void exchange(double *buf, int n) {
+                MPI_Send(buf, n, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+                MPI_Send(buf, n, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
+            }
+        """)
+
+        result = MPINonBlockingRule().apply(_make_ctx(source, "c", hw_a100))
+        assert result is not None
+        new_src, _ = result
+
+        assert new_src.count("MPI_Isend(") == 2
+        assert "MPI_Waitall(2, req, stat)" in new_src
+        assert "&req[0]" in new_src
+        assert "&req[1]" in new_src
+
     def test_not_applies_python(self, hw_a100):
         from perflens.optimizer.rules.c_rules import MPINonBlockingRule
         r = MPINonBlockingRule()
