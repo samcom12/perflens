@@ -216,6 +216,7 @@ class TestOpenMPParallelRule:
         src = "#pragma omp parallel for\n" + C_PARALLEL_LOOP
         ctx = _make_ctx(src, "c", hw_intel)
         assert not r.applies(ctx)
+        assert r.apply(ctx) is None
 
     def test_not_applicable_python(self, hw_intel):
         from perflens.optimizer.rules.c_rules import OpenMPParallelRule

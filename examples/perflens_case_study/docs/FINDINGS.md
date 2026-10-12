@@ -346,18 +346,21 @@ Classification: PerfLens rule-optimizer correctness/safety issue.
 
 ### FINDING-P8-02 — OpenMPParallelRule can duplicate an existing parallel pragma when applied directly
 
-**Status:** Confirmed
+**Status:** Resolved; verified by focused regression tests
 
-`OpenMPParallelRule.applies()` correctly detects an existing `#pragma omp parallel for` and returns `False`. However, `apply()` does not enforce the same guard when called directly.
+`OpenMPParallelRule.apply()` now independently checks whether the source already contains an OpenMP parallel-for directive and returns `None` rather than generating a duplicate transformation. This protects direct calls to `apply()` as well as the normal `applies()`-then-`apply()` flow.
 
-In the isolated test, `applies()` returned `False`, but `apply()` generated an additional `#pragma omp parallel for schedule(static)`, resulting in two consecutive parallel pragmas before the same loop.
+Verification on the current implementation:
+- Focused `OpenMPParallelRule` tests: 4 passed.
+- Complete `tests/unit/test_backends_and_rules.py` module: 60 passed.
+- The regression test verifies that direct `apply()` returns `None` when the source already contains `#pragma omp parallel for`.
 
-**Evidence:**
+Historical failure evidence:
 - `~/perflens_work/benchmark_results/phase8_rule_optimizer/P8-08-existing-parallel.txt`
 
-**Classification:** PerfLens rule-optimizer correctness/safety issue.
+Classification: PerfLens rule-optimizer correctness/safety issue.
 
-**Impact:** Direct invocation of `apply()` on already-parallelized code can produce an invalid or redundant OpenMP transformation. The normal rule-engine path may avoid this because it checks `applies()` first, but the rule itself does not maintain the guard invariant inside `apply()`.
+**Impact:** Without the guard, direct invocation of `apply()` on already-parallelized code could produce an invalid or redundant OpenMP transformation. The guard is now enforced inside `apply()` itself, so the direct-call path is protected as well as the normal rule-engine path.
 
 ### FINDING-P8-03 — MPINonBlockingRule places MPI_Waitall outside function scope
 

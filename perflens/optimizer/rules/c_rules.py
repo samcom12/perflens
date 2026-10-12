@@ -137,6 +137,14 @@ class OpenMPParallelRule(TransformRule):
         return bool(_OUTER_LOOP.search(ctx.source))
 
     def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
+        # Keep direct calls safe too; callers may invoke apply() without applies().
+        if ctx.language not in self.supported_languages:
+            return None
+        if ctx.hardware.total_cores < 2 or ctx.hardware.gpu:
+            return None
+        if _OMP_PARALLEL_ALREADY.search(ctx.source):
+            return None
+
         source = ctx.source
 
         # 1. Find every for-loop header and the span of its body.
