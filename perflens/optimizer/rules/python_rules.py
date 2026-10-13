@@ -8,6 +8,7 @@ without executing the code.
 from __future__ import annotations
 
 import re
+import ast
 from typing import Optional
 
 from perflens.optimizer.models import Patch, TransformKind
@@ -244,32 +245,36 @@ class NumbaAnnotateRule(TransformRule):
         ) for f in ctx.findings)
 
     def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
-        lines   = ctx.source.splitlines()
-        patches = []
+        try:
+            tree = ast.parse(ctx.source)
+        except SyntaxError:
+            return None
 
         # Find flagged line numbers for hot functions
         hot_lines = {f.line for f in ctx.findings if f.kind in (
             FindingKind.NUMPY_LOOP, FindingKind.TRANSCENDENTAL_IN_LOOP,
         )}
 
-        candidates: list[tuple[int, str]] = []   # (line_index, name)
-        for m in _FUNC_DEF.finditer(ctx.source):
-            name   = m.group("name")
-            lineno = _line_of(ctx.source, m)
-            if name in _SKIP_NAMES:
+        candidates: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            # Check if any hot findings are within ~100 lines of this function
-            near = any(abs(lineno - hl) < 80 for hl in hot_lines)
-            if near:
-                candidates.append((lineno - 1, name))
+            lineno = node.lineno
+            end_lineno = node.end_lineno or lineno
+            if node.name in _SKIP_NAMES:
+                continue
+            if any(lineno <= hot_line <= end_lineno for hot_line in hot_lines):
+                candidates.append(node)
 
         if not candidates:
             return None
 
-        # Insert decorator before each candidate function (reverse order)
-        for idx, name in sorted(candidates, reverse=True):
+        patches = []
+        # Describe decorators before applying source edits.
+        for node in sorted(candidates, key=lambda item: item.lineno, reverse=True):
+            idx = node.lineno - 1
+            name = node.name
             decorator = "@njit(parallel=True, cache=True)"
-            lines.insert(idx, decorator)
             patches.append(Patch(
                 transform_kind=TransformKind.NUMBA_JIT,
                 description=f"Add @njit(parallel=True) to function `{name}`",
@@ -284,17 +289,59 @@ class NumbaAnnotateRule(TransformRule):
                 expected_speedup="10–100× vs pure Python",
             ))
 
-        # Add numba import if not present
-        source = "\n".join(lines)
-        if "from numba import" not in source and "import numba" not in source:
-            source = "from numba import njit, prange\n" + source
+        source = ctx.source
 
-        # Replace range with prange inside decorated functions
-        source = re.sub(
-            r"(?<=@njit\(parallel=True, cache=True\)\ndef [^\n]+\n(?:[^\n]*\n){0,200})\brange\b",
-            "prange",
-            source,
-        )
+        # Replace only loop iterators of selected functions. AST locations
+        # avoid strings, comments, unrelated calls, and nearby functions.
+        line_offsets = [0]
+        for line in ctx.source.splitlines(keepends=True):
+            line_offsets.append(line_offsets[-1] + len(line))
+
+        replacements: list[tuple[int, int]] = []
+        for function in candidates:
+            for node in ast.walk(function):
+                if not isinstance(node, (ast.For, ast.AsyncFor)):
+                    continue
+                iterator = node.iter
+                if (
+                    isinstance(iterator, ast.Call)
+                    and isinstance(iterator.func, ast.Name)
+                    and iterator.func.id == "range"
+                ):
+                    start = line_offsets[iterator.func.lineno - 1] + iterator.func.col_offset
+                    end = start + len("range")
+                    replacements.append((start, end))
+
+        for start, end in sorted(replacements, reverse=True):
+            source = source[:start] + "prange" + source[end:]
+
+        # Insert decorators after range replacements so AST offsets remain
+        # offsets into the original source.
+        lines = source.splitlines(keepends=True)
+        for node in sorted(candidates, key=lambda item: item.lineno, reverse=True):
+            idx = node.lineno - 1
+            lines.insert(idx, "@njit(parallel=True, cache=True)\n")
+        source = "".join(lines)
+
+        # Add the import after a module docstring/future imports so generated
+        # source remains valid Python and preserves module metadata.
+        if "from numba import" not in source and "import numba" not in source:
+            import_line = 0
+            for node in tree.body:
+                if (
+                    isinstance(node, ast.Expr)
+                    and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)
+                ) or (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module == "__future__"
+                ):
+                    import_line = max(import_line, node.end_lineno or node.lineno)
+                else:
+                    break
+            source_lines = source.splitlines(keepends=True)
+            source_lines.insert(import_line, "from numba import njit, prange\n")
+            source = "".join(source_lines)
 
         return source, patches
 

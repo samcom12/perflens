@@ -415,15 +415,17 @@ As a result, a valid triple-nested loop can be identified as applicable but `app
 
 ### FINDING-P8-06 — NumbaAnnotateRule crashes during range-to-prange transformation
 
-**Status:** Confirmed
+**Status:** Corrected and verified
 
 **Evidence:** P8-23-numba-annotate.txt
 
-**Observed behavior:** `NumbaAnnotateRule.applies()` correctly returns `True` for a Python NumPy loop, but `apply()` raises `re.error: look-behind requires fixed-width pattern` from `python_rules.py:293`.
+**Observed behavior:** The original implementation raised `re.error: look-behind requires fixed-width pattern` while converting `range()` to `prange()`. A subsequent line-based replacement also changed `range()` calls in nearby unrelated functions and could preserve a stray standalone backslash from malformed test fixtures.
 
-**Impact:** The rule cannot complete its intended Numba transformation for the tested positive case.
+**Resolution:** `NumbaAnnotateRule` now parses valid Python with the AST, selects only functions containing the flagged finding line, and rewrites only `range()` used as a `for` loop iterator in those functions. Decorators and imports are inserted with source-aware line handling, and invalid source is declined without crashing.
 
-**Classification:** PerfLens rule-optimizer correctness/robustness bug.
+**Verification:** Focused Numba regression tests passed, including the original crash case, intended transformation, unrelated-function/module-level range preservation, and generated-source syntax validation. The full backend/rules test module passed with 69 tests.
+
+**Classification:** Resolved PerfLens rule-optimizer correctness/robustness bug.
 
 **Additional evidence:** P8-24 shows that even when `applies()` correctly returns `False` because `@njit` is already present, direct `apply()` still reaches the same invalid regex and crashes.
 

@@ -460,7 +460,7 @@ class TestMPINonBlockingRule:
     def test_waitall_stays_in_mpi_function_with_multiple_functions(self, hw_a100):
         from perflens.optimizer.rules.c_rules import MPINonBlockingRule
 
-        source = textwrap.dedent("""\\
+        source = textwrap.dedent("""\
             #include <mpi.h>
             void exchange(double *buf, int n) {
                 MPI_Send(buf, n, MPI_DOUBLE, 1, 0, MPI_COMM_WORLD);
@@ -489,7 +489,7 @@ class TestMPINonBlockingRule:
     def test_nested_if_keeps_declarations_and_waitall_in_function(self, hw_a100):
         from perflens.optimizer.rules.c_rules import MPINonBlockingRule
 
-        source = textwrap.dedent("""\\
+        source = textwrap.dedent("""\
             #include <mpi.h>
             void exchange(double *buf, int n) {
                 if (n > 0) {
@@ -636,6 +636,90 @@ PY_ITERROWS_SRC = textwrap.dedent("""\
             total += row['val']
         return total
 """)
+
+
+class TestNumbaAnnotateRule:
+    def test_annotates_hot_function_and_replaces_range(self, hw_a100):
+        from perflens.optimizer.rules.python_rules import NumbaAnnotateRule
+        from perflens.scanner.models import Finding, FindingKind, Severity
+
+        source = textwrap.dedent("""
+            import numpy as np
+
+            def compute(a):
+                total = 0.0
+                for i in range(len(a)):
+                    total += np.sin(a[i])
+                return total
+        """)
+        finding = Finding(
+            Path("test.py"), 5, 0, FindingKind.NUMPY_LOOP,
+            Severity.HIGH, "numpy loop", "test Numba annotation",
+        )
+        ctx = _make_ctx(source, "python", hw_a100, [finding])
+        rule = NumbaAnnotateRule()
+
+        assert rule.applies(ctx)
+        result = rule.apply(ctx)
+        assert result is not None
+        new_source, patches = result
+        assert "@njit(parallel=True, cache=True)" in new_source
+        assert "from numba import njit, prange" in new_source
+        assert "for i in prange(len(a)):" in new_source
+
+    def test_does_not_replace_range_in_unrelated_function(self, hw_a100):
+        from perflens.optimizer.rules.python_rules import NumbaAnnotateRule
+        from perflens.scanner.models import Finding, FindingKind, Severity
+
+        source = textwrap.dedent("""
+            def compute(a):
+                total = 0.0
+                for i in range(len(a)):
+                    total += a[i]
+                return total
+
+            def unrelated(n):
+                return list(range(n))
+
+            module_values = list(range(3))
+        """)
+        finding = Finding(
+            Path("test.py"), 3, 0, FindingKind.NUMPY_LOOP,
+            Severity.HIGH, "numpy loop", "test Numba annotation",
+        )
+        ctx = _make_ctx(source, "python", hw_a100, [finding])
+        result = NumbaAnnotateRule().apply(ctx)
+
+        assert result is not None
+        new_source, patches = result
+        assert "for i in prange(len(a)):" in new_source
+        assert "list(range(n))" in new_source
+        assert "module_values = list(range(3))" in new_source
+
+    def test_generated_source_is_valid_python(self, hw_a100):
+        import ast
+        from perflens.optimizer.rules.python_rules import NumbaAnnotateRule
+        from perflens.scanner.models import Finding, FindingKind, Severity
+
+        source = textwrap.dedent('''
+            """Module docstring."""
+
+            def compute(n):
+                return sum(i for i in range(n))
+        ''')
+        finding = Finding(
+            Path("test.py"), 5, 0, FindingKind.NUMPY_LOOP,
+            Severity.HIGH, "numpy loop", "test Numba annotation",
+        )
+        result = NumbaAnnotateRule().apply(
+            _make_ctx(source, "python", hw_a100, [finding])
+        )
+
+        assert result is not None
+        new_source, _ = result
+        ast.parse(new_source)
+        assert "for i in prange(n)" not in new_source
+        assert "sum(i for i in range(n))" in new_source
 
 
 class TestScalarMathToNumpyRule:
