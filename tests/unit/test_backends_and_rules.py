@@ -534,6 +534,30 @@ class TestMPINonBlockingRule:
         assert "&req[0]" in new_src
         assert "&req[1]" in new_src
 
+    def test_apply_rejects_conditional_mpi_guard(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import MPINonBlockingRule
+
+        source = textwrap.dedent("""\\
+            #ifdef USE_MPI
+            #include <mpi.h>
+            #endif
+
+            void conditional_exchange(double *buf, int count, int rank, int peer) {
+            #ifdef USE_MPI
+                MPI_Send(buf, count, MPI_DOUBLE, peer, 0, MPI_COMM_WORLD);
+                MPI_Recv(buf, count, MPI_DOUBLE, peer, 0, MPI_COMM_WORLD,
+                         MPI_STATUS_IGNORE);
+            #endif
+            }
+        """)
+
+        rule = MPINonBlockingRule()
+        ctx = _make_ctx(source, "c", hw_a100)
+
+        assert not rule.applies(ctx)
+        assert rule.apply(ctx) is None
+
+
     def test_not_applies_python(self, hw_a100):
         from perflens.optimizer.rules.c_rules import MPINonBlockingRule
         r = MPINonBlockingRule()

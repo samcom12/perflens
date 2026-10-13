@@ -382,16 +382,17 @@ The transformation previously used file-wide brace searches, which could place d
 
 ### FINDING-P8-04 — MPINonBlockingRule ignores its conditional-MPI guard when applied directly
 
-**Status:** Confirmed
+**Status:** Resolved
 
-`MPINonBlockingRule.applies()` correctly returns `False` when `mpi.h` is conditionally included under `#ifdef USE_MPI`. However, direct `apply()` still transforms the source.
+`MPINonBlockingRule.apply()` now enforces the same applicability checks as rule selection, so direct calls do not transform source when `mpi.h` is conditionally included. The include matcher also accepts leading horizontal whitespace, avoiding false rejection of ordinary MPI includes.
 
-The generated result placed `MPI_Request`/`MPI_Status` declarations outside the conditional block and `MPI_Waitall()` outside both the conditional block and function scope.
+A regression test verifies that both `applies()` and direct `apply()` reject the conditionally guarded MPI source. The full backend-and-rules test module passes (65 tests).
 
 **Evidence:**
 - `~/perflens_work/benchmark_results/phase8_rule_optimizer/P8-14-mpi-ifdef-guard.txt`
+- Regression test: `tests/unit/test_backends_and_rules.py::TestMPINonBlockingRule::test_apply_rejects_conditional_mpi_guard`
 
-**Classification:** PerfLens rule-optimizer correctness/safety issue.
+**Classification:** Resolved PerfLens rule-optimizer correctness/safety issue.
 
 **Related finding:** FINDING-P8-03 — `MPI_Waitall()` can be placed outside function scope.
 

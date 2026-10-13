@@ -862,17 +862,34 @@ class MPINonBlockingRule(TransformRule):
         # resulting code won't compile without the USE_MPI define. Detect this
         # by checking that the #include <mpi.h> is not preceded by an #ifdef on
         # the same or immediately prior line.
-        mpi_include = re.search(r'^#\s*include\s*[<"]mpi\.h[>"]', ctx.source, re.MULTILINE)
+        mpi_include = re.search(
+            r'^[ \t]*#\s*include\s*[<"]mpi\.h[>"]',
+            ctx.source,
+            re.MULTILINE,
+        )
         if not mpi_include:
             return False
-        # Find the line before the #include; if it is an #ifdef, skip.
-        line_start = ctx.source.rfind("\n", 0, mpi_include.start()) + 1
-        prev_line = ctx.source[:line_start].rstrip().rsplit("\n", 1)[-1].strip()
-        if prev_line.startswith("#ifdef") or prev_line.startswith("#if "):
+        # Reject includes that are actually nested inside a conditional block.
+        directives = re.findall(
+            r'^\s*#\s*(if|ifdef|ifndef|endif)\b[^\n]*',
+            ctx.source[:mpi_include.start()],
+            re.MULTILINE,
+        )
+        conditional_depth = 0
+        for keyword in directives:
+            if keyword in {"if", "ifdef", "ifndef"}:
+                conditional_depth += 1
+            elif conditional_depth:
+                conditional_depth -= 1
+        if conditional_depth:
             return False
         return True
 
     def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
+        # Direct callers must obey the same safety checks as rule selection.
+        if not self.applies(ctx):
+            return None
+
         new_source, n_replaced = _make_nonblocking_c(ctx.source)
         if n_replaced == 0 or new_source == ctx.source:
             return None
