@@ -981,7 +981,7 @@ class LoopTilingRule(TransformRule):
         # and correct rather than aggressive and broken.
         outer_re = re.compile(
             rf"for\s*\(\s*(?:int|long|size_t)\s+{re.escape(i)}\s*=\s*0\s*;\s*"
-            rf"{re.escape(i)}\s*<\s*{re.escape(n1)}\s*;\s*{re.escape(i)}\s*\+\+\s*\)"
+            rf"{re.escape(i)}\s*<\s*{re.escape(n1)}\s*;\s*(?:{re.escape(i)}\s*\+\+|\+\+\s*{re.escape(i)})\s*\)"
         )
         om = outer_re.search(ctx.source)
         if not om:

@@ -398,11 +398,13 @@ A regression test verifies that both `applies()` and direct `apply()` reject the
 
 ### FINDING-P8-05 — LoopTilingRule rejects prefix-increment loops during transformation
 
-**Status:** Confirmed
+**Status:** Resolved
 
 `LoopTilingRule`'s `_TRIPLE_NEST` detector accepts a valid triple-nested loop using prefix increment (`++i`), so `applies()` returns `True`. However, the `outer_re` used by `apply()` requires postfix increment (`i++`).
 
 As a result, a valid triple-nested loop can be identified as applicable but `apply()` returns `None` without generating a transformation.
+
+**Resolution:** Updated `LoopTilingRule`'s outer-loop matcher to accept both prefix (`++i`) and postfix (`i++`) increments. Added a regression test confirming prefix-increment loops are transformed successfully.
 
 **Evidence:**
 - `~/perflens_work/benchmark_results/phase8_rule_optimizer/P8-15-loop-tiling.txt`

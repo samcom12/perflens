@@ -582,6 +582,18 @@ class TestLoopTilingRule:
         assert "TILE" in new_src
         assert patches[0].metadata.get("tile_size", 0) > 0
 
+    def test_prefix_increment_outer_loop_is_tiled(self, hw_a100):
+        from perflens.optimizer.rules.c_rules import LoopTilingRule
+        r = LoopTilingRule()
+        source = C_TRIPLE_NEST.replace("i++", "++i", 1)
+        ctx = _make_ctx(source, "c", hw_a100)
+        assert r.applies(ctx)
+        result = r.apply(ctx)
+        assert result is not None
+        new_src, patches = result
+        assert "TILE" in new_src
+        assert patches[0].metadata.get("tile_size", 0) > 0
+
     def test_tile_size_positive(self, hw_a100):
         from perflens.optimizer.rules.c_rules import _compute_tile_size
         tile = _compute_tile_size(hw_a100)
