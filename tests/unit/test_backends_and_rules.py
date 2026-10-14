@@ -873,6 +873,23 @@ class TestFortranOpenMPDoRule:
         assert "!$OMP PARALLEL DO" in new_src.upper()
         assert "!$OMP END PARALLEL DO" in new_src.upper()
 
+    def test_apply_does_not_duplicate_existing_omp_do(self, hw_a100):
+        from perflens.optimizer.rules.fortran_rules import FortranOpenMPDoRule
+
+        source = """program demo
+!$OMP PARALLEL DO SCHEDULE(STATIC)
+do i = 1, 100
+    a(i) = i
+end do
+!$OMP END PARALLEL DO
+end program demo
+"""
+        r = FortranOpenMPDoRule()
+        ctx = _make_ctx(source, "fortran", hw_a100)
+
+        assert not r.applies(ctx)
+        assert r.apply(ctx) is None
+
 
 class TestFortranMPINonBlockingRule:
     def test_applies(self, hw_a100):

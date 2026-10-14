@@ -439,6 +439,10 @@ As a result, a valid triple-nested loop can be identified as applicable but `app
 
 **Classification:** PerfLens rule-optimizer correctness/safety bug.
 
+**Resolution:** Added a guard to `FortranOpenMPDoRule.apply()` so it returns `None` when a `!$OMP PARALLEL DO` directive already exists, preventing duplicate directives during direct application.
+
+**Verification:** `TestFortranOpenMPDoRule::test_apply_does_not_duplicate_existing_omp_do` passes. Focused Fortran OpenMP DO tests: 3 passed. Full `tests/unit/test_backends_and_rules.py` module: 70 passed.
+
 ### FINDING-P9-01 — OpenAI-compatible cloud backend reports inconsistent API-key requirements
 
 **Status:** Confirmed

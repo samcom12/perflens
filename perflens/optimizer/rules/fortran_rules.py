@@ -121,6 +121,9 @@ class FortranOpenMPDoRule(TransformRule):
         return bool(_DO_LOOP.search(ctx.source))
 
     def apply(self, ctx: RuleContext) -> Optional[tuple[str, list[Patch]]]:
+        if _OMP_DO_ALREADY.search(ctx.source):
+            return None
+
         src_lines = ctx.source.splitlines()
 
         # 1. Compute, for every DO line, its matching END DO line and nesting depth.
