@@ -90,7 +90,12 @@ class OpenAICompatBackend(LLMBackend):
     def capabilities(self) -> BackendCapabilities:
         local = self.base_url.startswith("http://localhost") or \
                 self.base_url.startswith("http://127.")
-        needs_key = self.api_key not in (None, "local", "")
+        preset_config = KNOWN_ENDPOINTS.get(self._preset)
+        needs_key = (
+            bool(preset_config[1])
+            if preset_config is not None
+            else self.api_key not in (None, "local", "")
+        )
         return BackendCapabilities(
             name=f"openai-compat/{self.model}",
             requires_api_key=needs_key,

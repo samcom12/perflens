@@ -63,6 +63,14 @@ def test_create_backend_groq():
     assert isinstance(b, OpenAICompatBackend)
     assert "groq" in b.base_url
 
+
+def test_groq_requires_api_key_when_environment_variable_is_missing(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    b = create_backend("groq")
+
+    assert b.capabilities.requires_api_key is True
+
 def test_create_backend_lmstudio():
     from perflens.optimizer.backends.openai_compat_backend import OpenAICompatBackend
     b = create_backend("lmstudio")

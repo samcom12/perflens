@@ -445,11 +445,13 @@ As a result, a valid triple-nested loop can be identified as applicable but `app
 
 ### FINDING-P9-01 — OpenAI-compatible cloud backend reports inconsistent API-key requirements
 
-**Status:** Confirmed
+**Status:** Resolved
 
-For the `groq` preset, `list_backends()` correctly identifies `GROQ_API_KEY` as required. However, when the key is absent, `OpenAICompatBackend.capabilities` derives `requires_api_key` from the actual key value, causing the selected backend to report `Requires key: False`. Availability then fails generically instead of clearly identifying the missing credential.
+For the `groq` preset, `list_backends()` correctly identifies `GROQ_API_KEY` as required. Previously, when the key was absent, `OpenAICompatBackend.capabilities` derived `requires_api_key` from the actual key value, incorrectly reporting `Requires key: False`.
 
-**Evidence:** `P9-07-groq-missing-key.txt`
+**Resolution:** Capability reporting now derives the key requirement from the known preset configuration. Cloud presets report that a key is required even when its environment variable is unset; custom endpoints retain their existing key-value-based behavior. Regression test: `test_groq_requires_api_key_when_environment_variable_is_missing`.
+
+**Evidence:** Historical failure: `P9-07-groq-missing-key.txt`; regression verification: `tests/unit/test_backends_and_rules.py`.
 
 **Classification:** PerfLens backend credential-validation/reporting inconsistency.
 
