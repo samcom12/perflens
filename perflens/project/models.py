@@ -199,8 +199,12 @@ class ProjectGraph:
             opt  = "[green]✓[/green]" if sf.optimized_source else "—"
             pct_color = ("red" if sf.hotspot_pct > 20
                          else "yellow" if sf.hotspot_pct > 5 else "dim")
+            try:
+                display_path = str(sf.path.relative_to(self.root))
+            except ValueError:
+                display_path = str(sf.path)
             table.add_row(
-                sf.path.name[:34],
+                display_path[:34],
                 sf.language,
                 f"[{pct_color}]{sf.hotspot_pct:.1f}%[/{pct_color}]",
                 f"{sf.priority_score:.1f}",
@@ -254,8 +258,12 @@ class ProjectOptimizationPlan:
                 f"\n  [cyan]Phase {phase.phase_id}[/cyan]  {phase.reason}"
             )
             for sf in phase.files:
+                try:
+                    display_path = sf.path.relative_to(self.graph.root)
+                except ValueError:
+                    display_path = sf.path
                 console.print(
-                    f"    [white]{sf.path.name}[/white]  "
+                    f"    [white]{display_path}[/white]  "
                     f"hotspot={sf.hotspot_pct:.1f}%  "
                     f"priority={sf.priority_score:.1f}"
                 )

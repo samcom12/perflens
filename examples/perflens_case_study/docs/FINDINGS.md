@@ -494,12 +494,12 @@ The original command, `perflens project build examples/perflens_case_study --hw 
 
 **Status:** Reclassified; no code change required based on current evidence.
 
-### FINDING-P11-02 — Project optimization plan contains duplicate source entries
+### FINDING-P11-02 — Project output uses ambiguous basenames
 
-**Classification:** PerfLens integration/data-integrity defect  
-**Evidence:** `P11-04-project-optimize-dry-run.txt`
+**Classification:** CLI/reporting usability issue; duplicate-path defect not reproduced
+**Evidence:** `P11-04-project-optimize-dry-run.txt`; fresh rules-backend dry-run; path-display regression tests
 
-The end-to-end `project optimize --dry-run` pipeline completed crawl, compiler-feedback collection, static scanning, and optimization planning. However, the resulting optimization plan contained duplicate entries for the same source files, including `implicit_typing.f90`, `io.c`, and `main1.c`/`main2.c`/`main3.c`. The plan-building code converts dependency-order batches directly into file lists without an explicit final deduplication step. This can cause the same source file to be represented multiple times in the optimization plan.
+Historical output appeared to contain duplicate source entries because it displayed only basenames. A fresh pipeline run found no repeated full paths in the optimization plan. Repeated names such as `io.c` belonged to distinct files in different directories. No plan deduplication change is warranted from this evidence. The project file table and optimization plan now display project-relative paths, with paths outside the project root shown as supplied, so distinct files are distinguishable.
 
 ### FINDING-P11-03 — Project optimization includes nested test/fixture source files
 

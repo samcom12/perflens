@@ -359,6 +359,56 @@ def test_build_plan_respects_min_priority(simple_c_project):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_project_file_table_disambiguates_same_basenames(tmp_path):
+    from rich.console import Console
+
+    first = tmp_path / "src" / "io.c"
+    second = tmp_path / "tests" / "io.c"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_text("int first(void) { return 1; }")
+    second.write_text("int second(void) { return 2; }")
+
+    graph = ProjectCrawler(root=tmp_path).crawl()
+    console = Console(record=True, width=120)
+    graph.print_file_table(console)
+    output = console.export_text()
+
+    assert "src/io.c" in output
+    assert "tests/io.c" in output
+
+
+def test_optimization_plan_disambiguates_same_basenames(tmp_path):
+    from rich.console import Console
+
+    first = tmp_path / "src" / "io.c"
+    second = tmp_path / "tests" / "io.c"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_text("int first(void) { return 1; }")
+    second.write_text("int second(void) { return 2; }")
+
+    graph = ProjectCrawler(root=tmp_path).crawl()
+    plan = ProjectOptimizationPlan(
+        graph=graph,
+        phases=[
+            OptimizationPhase(
+                phase_id=1,
+                files=[graph.files[first], graph.files[second]],
+                reason="test",
+            )
+        ],
+    )
+    console = Console(record=True, width=120)
+    plan.print_plan(console)
+    output = console.export_text()
+
+    assert "src/io.c" in output
+    assert "tests/io.c" in output
+
+
 # End-to-end project pipeline (rule engine, no build)
 # ══════════════════════════════════════════════════════════════════════════════
 
