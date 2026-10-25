@@ -485,12 +485,14 @@ For the `groq` preset, `list_backends()` correctly identifies `GROQ_API_KEY` as 
 
 **Status:** Confirmed safety limitation.
 
-### FINDING-P11-01 — `project build` reports failure for a successfully buildable case-study
+### FINDING-P11-01 — Relative-path invocation failed outside the repository root
 
-**Classification:** PerfLens integration defect  
-**Evidence:** `P11-02-project-build.txt`
+**Classification:** Test invocation/environment issue; no confirmed PerfLens defect
+**Evidence:** `P11-02-project-build.txt`; `P11-09-project-build-absolute-path.txt`
 
-`perflens project build examples/perflens_case_study --hw intel_icx --jobs 4` reported `Build failed` with `Compiler reports attached: 0 files`. An independent `cmake --build build -j4` on the same case-study completed successfully with `Built target heat_solver`. This indicates the failure is in the PerfLens project-build integration path rather than the case-study build itself.
+The original command, `perflens project build examples/perflens_case_study --hw intel_icx --jobs 4`, failed during project crawling with `FileNotFoundError` because the relative path did not exist from the command's working directory. The failure occurred before the build driver ran, so it does not establish a build integration defect. Repeating the build with the absolute project path succeeded and attached compiler feedback to 30 files.
+
+**Status:** Reclassified; no code change required based on current evidence.
 
 ### FINDING-P11-02 — Project optimization plan contains duplicate source entries
 
