@@ -476,3 +476,165 @@ def test_project_pipeline_patch_dir_created(example_project, tmp_path):
         po.ProjectOptimizer.__init__ = orig_init
 
     assert result.error is None
+
+
+def test_project_optimizer_writes_patch_for_nested_source(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from perflens.optimizer.models import (
+        OptimizationResult,
+        Patch,
+        TransformKind,
+    )
+    from perflens.optimizer.project_optimizer import ProjectOptimizer
+
+    source = tmp_path / "src" / "nested" / "p10_fixture.c"
+    source.parent.mkdir(parents=True)
+    source.write_text("int compute(int x) { return x + 1; }\n")
+
+    sf = SourceFile(source, "c")
+    graph = ProjectGraph(root=tmp_path, build_system=BuildSystem.BARE)
+    graph.files[source] = sf
+    phase = OptimizationPhase(
+        phase_id=0,
+        files=[sf],
+        reason="nested-source regression test",
+    )
+    plan = ProjectOptimizationPlan(graph=graph, phases=[phase])
+
+    optimized = "int compute(int x) { return x + 2; }\n"
+    patch = Patch(
+        transform_kind=TransformKind.GENERAL,
+        description="test transformation",
+        original_snippet="return x + 1;",
+        optimized_snippet="return x + 2;",
+        start_line=1,
+        end_line=1,
+        rationale="Exercise nested patch output",
+    )
+    engine_result = OptimizationResult(
+        source=source,
+        iteration=1,
+        patches=[patch],
+        optimized_source=optimized,
+    )
+
+    class FakeEngine:
+        def __init__(self, **kwargs):
+            self.hardware = None
+
+        def optimize(self, **kwargs):
+            return [engine_result]
+
+    monkeypatch.setattr(
+        "perflens.optimizer.engine.OptimizationEngine", FakeEngine
+    )
+
+    optimizer = ProjectOptimizer(
+        plan=plan,
+        hardware=SimpleNamespace(name="test"),
+        patch_dir=tmp_path / "perflens_patches",
+        validate_each_phase=False,
+    )
+    result = optimizer.run()
+
+    patch_path = tmp_path / "perflens_patches" / "src" / "nested" / "p10_fixture.c"
+    assert patch_path.exists()
+    assert patch_path.read_text() == optimized
+    assert sf.optimized_source == optimized
+    assert result.files_optimized == 1
+    assert result.total_patches == 1
+
+
+def test_apply_patches_rejects_invalid_source(tmp_path):
+    from perflens.optimizer.project_optimizer import ProjectOptimizer
+
+    root = tmp_path / "project"
+    patch_dir = tmp_path / "patches"
+    source = root / "src" / "solver.c"
+    patch = patch_dir / "src" / "solver.c"
+
+    source.parent.mkdir(parents=True)
+    patch.parent.mkdir(parents=True)
+
+    original = "int main(void) { return 0; }\n"
+    malformed = "this is not valid C source !!!\n"
+    source.write_text(original)
+    patch.write_text(malformed)
+
+    sf = SourceFile(path=source, language="c")
+    graph = ProjectGraph(
+        root=root,
+        build_system=BuildSystem.BARE,
+        files={source: sf},
+    )
+    plan = ProjectOptimizationPlan(
+        graph=graph,
+        phases=[
+            OptimizationPhase(
+                phase_id=0,
+                files=[sf],
+                reason="invalid patch regression",
+            )
+        ],
+    )
+    optimizer = ProjectOptimizer(
+        plan=plan,
+        hardware=None,
+        patch_dir=patch_dir,
+        validate_each_phase=False,
+    )
+
+    updated = optimizer.apply_patches(backup=True)
+
+    assert updated == 0
+    assert source.read_text() == original
+    assert not source.with_suffix(".c.perflens_backup").exists()
+    assert patch.read_text() == malformed
+
+
+def test_apply_patches_accepts_valid_comment_only_patch(tmp_path):
+    from perflens.optimizer.project_optimizer import ProjectOptimizer
+
+    root = tmp_path / "project"
+    patch_dir = tmp_path / "patches"
+    source = root / "src" / "solver.c"
+    patch = patch_dir / "src" / "solver.c"
+
+    source.parent.mkdir(parents=True)
+    patch.parent.mkdir(parents=True)
+
+    original = "void scale(double *a, int n) { for (int i = 0; i < n; i++) a[i] *= 2.0; }\n"
+    patched = "/* validated patch */\n" + original
+    source.write_text(original)
+    patch.write_text(patched)
+
+    sf = SourceFile(path=source, language="c")
+    graph = ProjectGraph(
+        root=root,
+        build_system=BuildSystem.BARE,
+        files={source: sf},
+    )
+    plan = ProjectOptimizationPlan(
+        graph=graph,
+        phases=[
+            OptimizationPhase(
+                phase_id=0,
+                files=[sf],
+                reason="valid patch regression",
+            )
+        ],
+    )
+    optimizer = ProjectOptimizer(
+        plan=plan,
+        hardware=None,
+        patch_dir=patch_dir,
+        validate_each_phase=False,
+    )
+
+    updated = optimizer.apply_patches(backup=True)
+
+    assert updated == 1
+    assert source.read_text() == patched
+    assert source.with_suffix(".c.perflens_backup").read_text() == original
+    assert patch.read_text() == patched

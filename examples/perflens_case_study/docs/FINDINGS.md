@@ -475,15 +475,15 @@ For the `groq` preset, `list_backends()` correctly identifies `GROQ_API_KEY` as 
 **Test:** P10-10  
 **Severity:** High
 
-**Observation:** `ProjectOptimizer.apply_patches()` copied a deliberately malformed source artifact into the target source file without performing syntax, compilation, or patch-validity validation.
+**Observation:** The original P10-10 reproduction confirmed that `ProjectOptimizer.apply_patches()` overwrote valid source with a malformed patch artifact without validation.
 
-**Evidence:** `P10-10-invalid-patch.txt`
+**Evidence:** Historical reproduction: `P10-10-invalid-patch.txt`. Regression tests: `test_apply_patches_rejects_invalid_source` and `test_apply_patches_accepts_valid_comment_only_patch` in `tests/unit/project/test_project.py`.
 
-**Impact:** Direct use of `apply_patches()` can overwrite valid source code with invalid content if an invalid artifact reaches `perflens_patches/`. The existing backup mechanism preserves the previous source, but does not prevent the invalid write.
+**Impact:** Without validation, direct use of `apply_patches()` could replace valid source with invalid content.
 
-**Implementation basis:** The method checks only whether the target exists and then uses `shutil.copy2()`; no validation is performed in `apply_patches()` itself.
+**Fix:** `apply_patches()` now validates each existing target/artifact pair with `PatchValidator` before writing. Validation failures, unverified artifacts, and validation exceptions are skipped; backups are created only for accepted patches. The validator's fail-closed correctness policy remains unchanged.
 
-**Status:** Confirmed safety limitation.
+**Status:** Fix implemented; focused regression tests pass. Broader project and validator test modules also pass. Historical failure retained as evidence.
 
 ### FINDING-P11-01 — Relative-path invocation failed outside the repository root
 

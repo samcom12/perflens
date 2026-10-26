@@ -349,21 +349,46 @@ class ProjectOptimizer:
 
     def apply_patches(self, backup: bool = True) -> int:
         """
-        Copy validated patches from patch_dir back into the project tree.
-        Returns number of files updated.
+        Validate patch artifacts before copying them into the project tree.
+
+        Returns the number of files updated. Invalid or unverified artifacts
+        are skipped; the original source and its backup remain untouched.
         """
+        from perflens.validator.checker import PatchValidator
+
         count = 0
-        for patch_path in self.patch_dir.rglob("*"):
+        validator = PatchValidator(console=self.console)
+
+        for patch_path in sorted(self.patch_dir.rglob("*")):
             if not patch_path.is_file():
                 continue
-            rel       = patch_path.relative_to(self.patch_dir)
+
+            rel = patch_path.relative_to(self.patch_dir)
             orig_path = self.plan.graph.root / rel
+
             if not orig_path.exists():
                 continue
-            if backup:
-                orig_path.with_suffix(orig_path.suffix + ".perflens_backup").write_bytes(
-                    orig_path.read_bytes()
+
+            try:
+                report = validator.validate(original=orig_path, patched=patch_path)
+            except Exception as exc:
+                self.console.print(
+                    f"[yellow]  - {rel}: validation error; skipped ({exc})[/yellow]"
                 )
+                continue
+
+            if not report.passed:
+                self.console.print(
+                    f"[yellow]  - {rel}: validation {report.verdict}; skipped[/yellow]"
+                )
+                continue
+
+            if backup:
+                orig_path.with_suffix(
+                    orig_path.suffix + ".perflens_backup"
+                ).write_bytes(orig_path.read_bytes())
+
             shutil.copy2(str(patch_path), str(orig_path))
             count += 1
+
         return count
