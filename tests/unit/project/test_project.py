@@ -546,6 +546,70 @@ def test_project_optimizer_writes_patch_for_nested_source(tmp_path, monkeypatch)
     assert result.total_patches == 1
 
 
+
+def test_project_optimizer_real_rules_backend_writes_nested_patch(tmp_path):
+    """Regression: real rules engine output is materialized at nested paths."""
+    from types import SimpleNamespace
+
+    from perflens.optimizer.project_optimizer import ProjectOptimizer
+    from perflens.project.models import (
+        BuildSystem, ProjectGraph, SourceFile,
+        OptimizationPhase, ProjectOptimizationPlan,
+    )
+    from perflens.scanner.models import Finding, FindingKind, Severity
+
+    root = tmp_path / "project"
+    source = root / "src" / "nested" / "p10_fixture.c"
+    source.parent.mkdir(parents=True)
+    original = """void compute(double *a, double scale, int n) {
+    for (int i = 0; i < n; i++) {
+        a[i] = a[i] / scale;
+    }
+}
+"""
+    source.write_text(original)
+
+    finding = Finding(
+        file=source,
+        line=3,
+        col=0,
+        kind=FindingKind.DIVISION_IN_LOOP,
+        severity=Severity.MEDIUM,
+        message="Division inside loop",
+        suggestion="Hoist invariant reciprocal",
+    )
+    sf = SourceFile(source, "c")
+    sf.scanner_findings = [finding]
+
+    graph = ProjectGraph(root=root, build_system=BuildSystem.BARE)
+    graph.files[source] = sf
+    phase = OptimizationPhase(
+        phase_id=0,
+        files=[sf],
+        reason="P10-01 real-engine nested patch regression",
+    )
+    plan = ProjectOptimizationPlan(graph=graph, phases=[phase])
+    patch_dir = root / "perflens_patches"
+
+    optimizer = ProjectOptimizer(
+        plan=plan,
+        hardware=SimpleNamespace(name="test"),
+        patch_dir=patch_dir,
+        validate_each_phase=False,
+        backend="rules",
+    )
+    result = optimizer.run()
+
+    patch_path = patch_dir / "src" / "nested" / "p10_fixture.c"
+    assert result.error is None
+    assert patch_path.is_file()
+    assert "inv_scale" in patch_path.read_text()
+    assert sf.optimized_source == patch_path.read_text()
+    assert result.files_optimized == 1
+    assert result.total_patches >= 1
+    assert source.read_text() == original
+
+
 def test_apply_patches_rejects_invalid_source(tmp_path):
     from perflens.optimizer.project_optimizer import ProjectOptimizer
 

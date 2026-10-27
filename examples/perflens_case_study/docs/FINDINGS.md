@@ -461,13 +461,13 @@ For the `groq` preset, `list_backends()` correctly identifies `GROQ_API_KEY` as 
 **Test:** P10-03  
 **Severity:** High
 
-**Observation:** The historical P10-03 run reported `files_optimized=0`, `total_patches=0`, and no patch artifact. A current nested-source regression test now passes, confirming that `ProjectOptimizer.run()` can write the expected patch path and leave the original source unchanged.
+**Observation:** The historical P10-03 run reported `files_optimized=0`, `total_patches=0`, and no patch artifact. A new end-to-end regression test using the real rules backend now passes, confirming that the current `ProjectOptimizer.run()` path materializes the expected nested patch artifact, updates optimization metadata, and leaves the original source unchanged.
 
-**Evidence:** Historical reproduction: `P10-03-project-optimizer-patch-write.txt`. Current regression test: `test_project_optimizer_writes_patch_for_nested_source` in `tests/unit/project/test_project.py`.
+**Evidence:** Historical reproduction: `P10-03-project-optimizer-patch-write.txt`. Real-backend regression test: `test_project_optimizer_real_rules_backend_writes_nested_patch` in `tests/unit/project/test_project.py` (1 passed). The full project test file passed with 40 passed and 4 skipped.
 
-**Impact:** The historical result indicated a possible project-level patch materialization failure, but the current test does not reproduce it.
+**Impact:** The current real-backend path is verified by regression coverage. The cause of the original historical failure has not been established.
 
-**Status:** Open — historical failure not reproduced by the current nested-source regression test; root cause remains unconfirmed.
+**Status:** Resolved in current implementation — real rules-backend end-to-end regression test passes; original historical failure's root cause remains unconfirmed.
 
 ### FINDING-P10-02 — `apply_patches()` blindly applies invalid patch artifacts
 
