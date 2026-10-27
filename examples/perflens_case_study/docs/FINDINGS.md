@@ -461,13 +461,13 @@ For the `groq` preset, `list_backends()` correctly identifies `GROQ_API_KEY` as 
 **Test:** P10-03  
 **Severity:** High
 
-**Observation:** A controlled C fixture produces one successful patch when passed directly through `OptimizationEngine.optimize()` using the rules backend. However, the same source passed through `ProjectOptimizer.run()` results in `files_optimized=0`, `total_patches=0`, and no file under the configured `perflens_patches/src/nested/` path.
+**Observation:** The historical P10-03 run reported `files_optimized=0`, `total_patches=0`, and no patch artifact. A current nested-source regression test now passes, confirming that `ProjectOptimizer.run()` can write the expected patch path and leave the original source unchanged.
 
-**Evidence:** `P10-03-project-optimizer-patch-write.txt`
+**Evidence:** Historical reproduction: `P10-03-project-optimizer-patch-write.txt`. Current regression test: `test_project_optimizer_writes_patch_for_nested_source` in `tests/unit/project/test_project.py`.
 
-**Impact:** The project-level patch-management pipeline may fail to materialize valid optimization results even when the underlying optimization engine succeeds.
+**Impact:** The historical result indicated a possible project-level patch materialization failure, but the current test does not reproduce it.
 
-**Status:** Confirmed integration defect; exact internal cause requires further source-level investigation.
+**Status:** Open — historical failure not reproduced by the current nested-source regression test; root cause remains unconfirmed.
 
 ### FINDING-P10-02 — `apply_patches()` blindly applies invalid patch artifacts
 
@@ -483,7 +483,7 @@ For the `groq` preset, `list_backends()` correctly identifies `GROQ_API_KEY` as 
 
 **Fix:** `apply_patches()` now validates each existing target/artifact pair with `PatchValidator` before writing. Validation failures, unverified artifacts, and validation exceptions are skipped; backups are created only for accepted patches. The validator's fail-closed correctness policy remains unchanged.
 
-**Status:** Fix implemented; focused regression tests pass. Broader project and validator test modules also pass. Historical failure retained as evidence.
+**Status:** Resolved — validation fix implemented and regression-tested; committed and pushed in `1572335` (`fix: validate patches before applying to project`). Historical failure retained as evidence.
 
 ### FINDING-P11-01 — Relative-path invocation failed outside the repository root
 
