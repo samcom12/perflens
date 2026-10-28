@@ -702,3 +702,63 @@ def test_apply_patches_accepts_valid_comment_only_patch(tmp_path):
     assert source.read_text() == patched
     assert source.with_suffix(".c.perflens_backup").read_text() == original
     assert patch.read_text() == patched
+
+
+def test_apply_patches_ignores_artifacts_outside_current_plan(tmp_path, monkeypatch):
+    from perflens.optimizer.project_optimizer import ProjectOptimizer
+    from perflens.validator.checker import PatchValidator
+    from perflens.validator.models import CheckResult, CheckStatus, ValidationReport
+
+    def accept_patch(self, original, patched):
+        return ValidationReport(
+            original=original,
+            patched=patched,
+            checks=[CheckResult(name="test validation", status=CheckStatus.PASS)],
+            correctness_verified=True,
+        )
+
+    monkeypatch.setattr(PatchValidator, "validate", accept_patch)
+
+    root = tmp_path / "project"
+    patch_dir = root / "perflens_patches"
+    planned_source = root / "src" / "solver.c"
+    stale_source = root / "tests" / "fixture.c"
+    stale_patch = patch_dir / "tests" / "fixture.c"
+
+    planned_source.parent.mkdir(parents=True)
+    stale_source.parent.mkdir(parents=True)
+    stale_patch.parent.mkdir(parents=True)
+
+    planned_source.write_text("int main(void) { return 0; }\n")
+    original = "int main(void) { return 0; }\n"
+    stale_source.write_text(original)
+    stale_patch.write_text("/* stale patch */\n" + original)
+
+    sf = SourceFile(path=planned_source, language="c")
+    graph = ProjectGraph(
+        root=root,
+        build_system=BuildSystem.BARE,
+        files={planned_source: sf},
+    )
+    plan = ProjectOptimizationPlan(
+        graph=graph,
+        phases=[
+            OptimizationPhase(
+                phase_id=0,
+                files=[sf],
+                reason="current plan excludes test fixture",
+            )
+        ],
+    )
+    optimizer = ProjectOptimizer(
+        plan=plan,
+        hardware=None,
+        patch_dir=patch_dir,
+        validate_each_phase=False,
+    )
+
+    updated = optimizer.apply_patches(backup=True)
+
+    assert updated == 0
+    assert stale_source.read_text() == original
+    assert not stale_source.with_suffix(".c.perflens_backup").exists()

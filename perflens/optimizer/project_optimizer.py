@@ -359,13 +359,23 @@ class ProjectOptimizer:
         count = 0
         validator = PatchValidator(console=self.console)
 
+        # Only apply artifacts for files in this plan. The patch directory can
+        # contain stale artifacts from earlier runs or unrelated source files.
+        planned_paths = {
+            sf.path.resolve()
+            for phase in self.plan.phases
+            for sf in phase.files
+        }
+
         for patch_path in sorted(self.patch_dir.rglob("*")):
             if not patch_path.is_file():
                 continue
 
             rel = patch_path.relative_to(self.patch_dir)
-            orig_path = self.plan.graph.root / rel
+            orig_path = (self.plan.graph.root / rel).resolve()
 
+            if orig_path not in planned_paths:
+                continue
             if not orig_path.exists():
                 continue
 

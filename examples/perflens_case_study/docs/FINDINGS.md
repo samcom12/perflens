@@ -503,7 +503,7 @@ Historical output appeared to contain duplicate source entries because it displa
 
 ### FINDING-P11-03 — Project optimization includes nested test/fixture source files
 
-**Classification:** Production-scope observation  
-**Evidence:** `P11-05-project-optimize-apply.txt`
+**Classification:** Partially addressed; optimization-scope policy remains open
+**Evidence:** `P11-05-project-optimize-apply.txt`; regression test `test_apply_patches_ignores_artifacts_outside_current_plan`
 
-The `project optimize --apply` workflow treated source files under the case-study's `tests/` and `language_cases/` directories as optimization targets. The run created patches and backups for files including `tests/mixed_nested_project/fortran/implicit_typing.f90` and `tests/multi_nested_project/src/utils/io.c`. This may be undesirable for projects where test or fixture directories are not intended optimization targets. No conclusion is made here about whether such directories should universally be excluded.
+The historical `project optimize --apply` run treated source files under the case-study's `tests/` and `language_cases/` directories as optimization targets, creating patches and backups for files including `tests/mixed_nested_project/fortran/implicit_typing.f90` and `tests/multi_nested_project/src/utils/io.c`. A related patch-application defect is now fixed: `ProjectOptimizer.apply_patches()` only applies artifacts whose source paths belong to the current optimization plan, preventing stale artifacts outside that plan from being applied. The regression test reproduces the stale-artifact overwrite and passes with the fix. This does not exclude test or fixture files that are explicitly present in the current plan; whether those directories should be excluded remains an open policy decision.
