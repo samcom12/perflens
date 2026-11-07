@@ -507,3 +507,14 @@ Historical output appeared to contain duplicate source entries because it displa
 **Evidence:** `P11-05-project-optimize-apply.txt`; regression test `test_apply_patches_ignores_artifacts_outside_current_plan`
 
 The historical `project optimize --apply` run treated source files under the case-study's `tests/` and `language_cases/` directories as optimization targets, creating patches and backups for files including `tests/mixed_nested_project/fortran/implicit_typing.f90` and `tests/multi_nested_project/src/utils/io.c`. A related patch-application defect is now fixed: `ProjectOptimizer.apply_patches()` only applies artifacts whose source paths belong to the current optimization plan, preventing stale artifacts outside that plan from being applied. The regression test reproduces the stale-artifact overwrite and passes with the fix. This does not exclude test or fixture files that are explicitly present in the current plan; whether those directories should be excluded remains an open policy decision.
+
+### Environment Finding: Clang/SIMD Validation
+
+- **Status:** Resolved
+- **Issue:** The cluster's original Python 3.12 environment lacked `_ctypes`, preventing Clang Python bindings from loading.
+- **Resolution:** Built a user-local Python 3.12 environment with libffi support.
+- **Validation:** All 8 `TestOpenMPSIMDRule` tests passed.
+- **Remaining limitation:** SQLite support is absent from the custom Python build, causing 3 dashboard integration tests to fail.
+- **Disposition:** SQLite support deferred; it does not block Clang-based SIMD validation.
+
+Detailed setup instructions and test commands are documented in `docs/development-environment.md`.

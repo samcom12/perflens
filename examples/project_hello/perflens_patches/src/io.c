@@ -34,7 +34,6 @@ void write_snapshot(const char *filename, const double *h,
 double l2_norm(const double *h, int n)
 {
     double norm = 0.0;
-    #pragma omp simd
     for (int i = 0; i < n; i++) {
         norm += pow(h[i], 2);                   /* ANTI-PATTERN: pow(x,2) → x*x */
     }
@@ -50,13 +49,10 @@ void array_stats(const double *a, int n,
     *vmean = 0.0;
 
     /* ANTI-PATTERN: three separate passes — should be one loop */
-    #pragma omp simd
     for (int i = 0; i < n; i++)
         if (a[i] < *vmin) *vmin = a[i];
-    #pragma omp simd
     for (int i = 0; i < n; i++)
         if (a[i] > *vmax) *vmax = a[i];
-    #pragma omp simd
     for (int i = 0; i < n; i++)
         *vmean += a[i];
     *vmean /= n;

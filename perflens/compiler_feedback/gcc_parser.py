@@ -37,6 +37,10 @@ _GCC_LINE = re.compile(
 )
 
 _PASS_KEYWORDS: dict[str, FeedbackKind] = {
+    "possible dependence between data-refs": FeedbackKind.DEPENDENCY,
+    "dependence distance":      FeedbackKind.DEPENDENCY,
+    "data dependence":          FeedbackKind.DEPENDENCY,
+    "multiple loop exits":      FeedbackKind.DEPENDENCY,
     "loop vectorized":           FeedbackKind.VECTORIZED,
     "vectorized using":          FeedbackKind.VECTORIZED,
     "couldn't vectorize":        FeedbackKind.NOT_VECTORIZED,

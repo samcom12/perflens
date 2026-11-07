@@ -64,6 +64,37 @@ def test_gcc_line_numbers(tmp_path):
     assert 100 in lines
 
 
+def test_gcc_classifies_possible_data_reference_dependence(tmp_path):
+    from perflens.compiler_feedback.gcc_parser import GCCFeedbackParser
+
+    log = tmp_path / "gcc-dependence.log"
+    log.write_text(
+        "solver.c:12:3: missed: not vectorized, "
+        "possible dependence between data-refs *_4 and *_6\n"
+    )
+
+    report = GCCFeedbackParser().parse_file(log, source=Path("solver.c"))
+
+    assert len(report.remarks) == 1
+    assert report.remarks[0].kind == FeedbackKind.DEPENDENCY
+    assert report.remarks[0].pass_name == "possible-dependence-between-data-refs"
+
+
+def test_gcc_classifies_dependence_distance(tmp_path):
+    from perflens.compiler_feedback.gcc_parser import GCCFeedbackParser
+
+    log = tmp_path / "gcc-distance.log"
+    log.write_text(
+        "solver.c:12:3: note: dependence distance = 1.\n"
+    )
+
+    report = GCCFeedbackParser().parse_file(log, source=Path("solver.c"))
+
+    assert len(report.remarks) == 1
+    assert report.remarks[0].kind == FeedbackKind.DEPENDENCY
+    assert report.remarks[0].pass_name == "dependence-distance"
+
+
 def test_gcc_scanner_hints(tmp_path):
     from perflens.compiler_feedback.gcc_parser import GCCFeedbackParser
     log = tmp_path / "gcc.log"

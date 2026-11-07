@@ -224,3 +224,25 @@ def test_hotspot_to_dict():
     d = h.to_dict()
     assert d["function"] == "flux"
     assert d["cpu_time_ms"] == 2500.5
+
+
+@pytest.mark.parametrize("suffix,content", [
+    (".csv", "this is not a VTune CSV\\n"),
+    (".txt", "this is not a VTune report\\n"),
+])
+def test_vtune_rejects_invalid_or_unsupported_report(tmp_path, suffix, content):
+    report = _write(tmp_path, "bad" + suffix, content)
+    with pytest.raises(ValueError):
+        VTuneParser().parse(report_path=report)
+
+
+def test_hpctoolkit_rejects_invalid_csv(tmp_path):
+    report = _write(tmp_path, "bad.csv", "not,a,profile\\n1,2,3\\n")
+    with pytest.raises(ValueError, match="Invalid HPCToolkit CSV"):
+        HPCToolkitParser().parse(report_path=report)
+
+
+def test_hpctoolkit_rejects_unsupported_extension(tmp_path):
+    report = _write(tmp_path, "bad.txt", "not a profile\\n")
+    with pytest.raises(ValueError, match="Unsupported HPCToolkit"):
+        HPCToolkitParser().parse(report_path=report)

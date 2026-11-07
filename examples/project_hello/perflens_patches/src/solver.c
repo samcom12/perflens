@@ -69,8 +69,6 @@ int main(int argc, char **argv)
 
     double dt = 0.001;
 
-    #pragma omp simd
-
     for (int step = 0; step < NSTEPS; step++) {
 
         halo_exchange(h, n, rank, nprocs);
@@ -83,6 +81,7 @@ int main(int argc, char **argv)
         compute_bed_slope(z, h, sb, n, DX);
 
         /* ANTI-PATTERN: missing #pragma omp parallel for */
+        #pragma omp simd
         for (int i = 1; i < n-1; i++) {
             h_new[i] = h[i] - dt / DX * (fh[i] - fh[i-1]);    /* ANTI-PATTERN: division */
             u_new[i] = u[i] - dt / DX * (fu[i] - fu[i-1]) / (h[i] + 1e-10) + dt * sb[i];

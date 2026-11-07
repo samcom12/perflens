@@ -1,0 +1,4 @@
+AC_INIT([perflens-test], [1.0])
+AM_INIT_AUTOMAKE
+AC_PROG_CC
+AC_OUTPUT

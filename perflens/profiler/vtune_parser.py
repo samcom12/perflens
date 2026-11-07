@@ -93,11 +93,7 @@ class VTuneParser:
         elif suffix in (".xml", ".xsl"):
             return self._parse_xml(report_path, source)
         else:
-            # Try CSV first
-            try:
-                return self._parse_csv(report_path, source)
-            except Exception:
-                return self._empty(source)
+            raise ValueError(f"Unsupported VTune report format: {report_path.suffix or '<no extension>'}")
 
     # ── CSV ─────────────────────────────────────────────────────────────────
 
@@ -122,6 +118,9 @@ class VTuneParser:
                 canon = _COLUMN_ALIASES.get(_norm_col(raw_col))
                 if canon:
                     col_map[raw_col] = canon
+
+        if "function" not in col_map.values() or "cpu_time_ms" not in col_map.values():
+            raise ValueError(f"Invalid VTune CSV report: missing function or CPU time column: {path}")
 
         hotspots: list[Hotspot] = []
         total_time = 0.0

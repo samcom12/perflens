@@ -57,7 +57,7 @@ class HPCToolkitParser:
         elif report_path.suffix.lower() == ".csv":
             return self._parse_csv(report_path, source)
 
-        return self._empty(source)
+        raise ValueError(f"Unsupported HPCToolkit report format: {report_path.suffix or '<no extension>'}")
 
     # ── XML (experiment.xml) ─────────────────────────────────────────────────
 
@@ -128,6 +128,11 @@ class HPCToolkitParser:
         # hpcproftt CSV has a comment header starting with '#'
         lines = [l for l in raw.splitlines() if not l.startswith("#")]
         reader = csv.DictReader(io.StringIO("\n".join(lines)))
+        columns = set(reader.fieldnames or [])
+        if not ({"Procedure", "Function", "Name"} & columns) or not (
+            {"Inclusive Time (ms)", "REALTIME (sec)"} & columns
+        ):
+            raise ValueError(f"Invalid HPCToolkit CSV report: missing procedure or time column: {path}")
 
         hotspots: list[Hotspot] = []
         total_time = 0.0
