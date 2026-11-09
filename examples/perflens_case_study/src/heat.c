@@ -40,7 +40,7 @@ void heat_step(const double *current, double *next,
 void heat_step_tiled(const double *current, double *next,
                      size_t nx, size_t ny, double alpha, double dt)
 {
-    const double inv_dt = 1.0 / dt;
+    const double diffusion_coeff = alpha * dt;
 
 #ifndef TILE
 #define TILE 16
@@ -64,7 +64,7 @@ void heat_step_tiled(const double *current, double *next,
                         4.0 * current[idx];
 
                     next[idx] = current[idx] +
-                                alpha * laplacian * inv_dt;
+                                diffusion_coeff * laplacian;
                 }
             }
         }
@@ -74,7 +74,7 @@ void heat_step_tiled(const double *current, double *next,
 void heat_step_openmp(const double *current, double *next,
                       size_t nx, size_t ny, double alpha, double dt)
 {
-    const double inv_dt = 1.0 / dt;
+    const double diffusion_coeff = alpha * dt;
 
     #pragma omp parallel for schedule(static)
     for (size_t i = 1; i < nx - 1; ++i) {
@@ -88,7 +88,7 @@ void heat_step_openmp(const double *current, double *next,
                 current[i * ny + (j + 1)] -
                 4.0 * current[idx];
 
-            next[idx] = current[idx] + alpha * laplacian * inv_dt;
+            next[idx] = current[idx] + diffusion_coeff * laplacian;
         }
     }
 }
